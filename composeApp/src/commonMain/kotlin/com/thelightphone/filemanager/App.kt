@@ -30,7 +30,10 @@ import androidx.compose.ui.unit.dp
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.delay
@@ -66,7 +69,9 @@ fun App() {
         // null = at the root list, non-null = browsing a directory
         var currentPath by remember { mutableStateOf<String?>(null) }
 
-        val client = remember {
+        val apiKey = remember { getApiKey() }
+
+        val client = remember(apiKey) {
             HttpClient {
                 install(ContentNegotiation) {
                     json()
@@ -74,6 +79,11 @@ fun App() {
                 install(HttpTimeout) {
                     requestTimeoutMillis = 10000
                     connectTimeoutMillis = 5000
+                }
+                if (apiKey != null) {
+                    defaultRequest {
+                        header(HttpHeaders.Authorization, "Bearer $apiKey")
+                    }
                 }
             }
         }
@@ -114,7 +124,7 @@ fun App() {
             while (true) {
                 delay(6000)
                 serverConnected = try {
-                    client.get("${getBaseUrl()}/api/ping").status.isSuccess()
+                    client.get("${getBaseUrl()}/ping").status.isSuccess()
                 } catch (_: Throwable) {
                     false
                 }

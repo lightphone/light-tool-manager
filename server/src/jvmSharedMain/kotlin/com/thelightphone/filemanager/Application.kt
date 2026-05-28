@@ -45,9 +45,16 @@ data class DeleteResponse(val deleted: Int)
 @Serializable
 data class RenameResponse(val renamed: Boolean)
 
+fun generateApiKey(): String {
+    val bytes = ByteArray(32)
+    java.security.SecureRandom().nextBytes(bytes)
+    return bytes.joinToString("") { "%02x".format(it) }
+}
+
 fun Application.module(
     rootDataProvider: RootDataProvider,
     enableLogging: Boolean,
+    apiKey: String? = null,
     logHandler: ((Level, String, Throwable?) -> Unit) = { _, _, _ -> }
 ) {
     install(ContentNegotiation) {
@@ -87,6 +94,23 @@ fun Application.module(
     }
 
 
+    if (apiKey != null) {
+        intercept(ApplicationCallPipeline.Plugins) {
+            val path = call.request.path()
+            if (path.startsWith("/api/")) {
+                val auth = call.request.header(HttpHeaders.Authorization)
+                val queryKey = call.request.queryParameters["key"]
+                if (auth != "Bearer $apiKey" && queryKey != apiKey) {
+                    call.respond(HttpStatusCode.Unauthorized)
+                    finish()
+                    return@intercept
+                }
+            }
+        }
+    } else {
+        System.err.println("WARNING: File Manager server running with no api key!")
+    }
+
     val downloadTokenManager = DownloadTokenManager()
 
     routing {
@@ -94,7 +118,7 @@ fun Application.module(
             default("index.html")
         }
 
-        get("/api/ping") {
+        get("/ping") {
             call.respond(HttpStatusCode.OK)
         }
 

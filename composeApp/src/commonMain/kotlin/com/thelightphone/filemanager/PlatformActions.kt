@@ -10,3 +10,5 @@ expect fun pushBrowserState(path: String?)
 expect fun onBrowserBack(handler: (path: String?) -> Unit)
 
 expect fun triggerFilePicker(onFileSelected: (fileName: String, bytes: ByteArray) -> Unit)
+
+expect fun getApiKey(): String?

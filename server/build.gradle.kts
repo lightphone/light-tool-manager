@@ -56,7 +56,6 @@ kotlin {
         }
 
         androidMain.get().dependencies {
-            implementation(libs.jmdns)
         }
     }
 }

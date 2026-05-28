@@ -25,3 +25,18 @@ actual fun onBrowserBack(handler: (path: String?) -> Unit) {
 actual fun triggerFilePicker(onFileSelected: (fileName: String, bytes: ByteArray) -> Unit) {
     // TODO: implement for wasmJs if needed
 }
+
+private var cachedApiKey: String? = null
+private var apiKeyExtracted = false
+
+actual fun getApiKey(): String? {
+    if (!apiKeyExtracted) {
+        apiKeyExtracted = true
+        val hash = window.location.hash.removePrefix("#")
+        if (hash.length == 64 && hash.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+            cachedApiKey = hash
+            window.history.replaceState(null, "", window.location.pathname)
+        }
+    }
+    return cachedApiKey
+}

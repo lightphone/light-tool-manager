@@ -3,6 +3,21 @@ package com.thelightphone.filemanager
 import kotlinx.browser.document
 import kotlinx.browser.window
 
+private var cachedApiKey: String? = null
+private var apiKeyExtracted = false
+
+actual fun getApiKey(): String? {
+    if (!apiKeyExtracted) {
+        apiKeyExtracted = true
+        val hash = window.location.hash.removePrefix("#")
+        if (hash.length == 64 && hash.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+            cachedApiKey = hash
+            window.history.replaceState(null, "", window.location.pathname)
+        }
+    }
+    return cachedApiKey
+}
+
 actual fun triggerDownload(url: String) {
     val link = document.createElement("a")
     link.setAttribute("href", url)

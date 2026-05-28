@@ -126,7 +126,8 @@ fun EntriesScreen(
                 }
                 if (response.status.isSuccess()) {
                     val tokenResponse = response.body<DownloadTokenResponse>()
-                    triggerDownload("${getBaseUrl()}/api/download-zip/${tokenResponse.token}")
+                    val keyParam = getApiKey()?.let { "?key=$it" } ?: ""
+                    triggerDownload("${getBaseUrl()}/api/download-zip/${tokenResponse.token}$keyParam")
                     selectedPaths = emptySet()
                 }
             }
