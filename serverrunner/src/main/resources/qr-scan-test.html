@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QR Scanner</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, system-ui, sans-serif;
+            background: #000;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 { margin-bottom: 16px; font-size: 24px; }
+        #reader { width: 100%; max-width: 500px; }
+        #status {
+            margin-top: 16px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+            display: none;
+        }
+        #status.error { display: block; background: #c0392b; }
+        #status.checking { display: block; background: #2c3e50; }
+        #status.success { display: block; background: #27ae60; }
+    </style>
+</head>
+<body>
+    <h1>Scan QR Code</h1>
+    <div id="reader"></div>
+    <div id="status"></div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+        let checking = false;
+
+        function setStatus(text, cls) {
+            statusEl.textContent = text;
+            statusEl.className = cls;
+        }
+
+        async function onScan(decodedText) {
+            if (checking) return;
+
+            let url;
+            try {
+                url = new URL(decodedText);
+            } catch {
+                setStatus('Not a valid URL', 'error');
+                return;
+            }
+
+            checking = true;
+            setStatus('Checking ' + url.hostname + '...', 'checking');
+
+            try {
+                const pingUrl = url.origin + '/ping';
+                const resp = await fetch(pingUrl, { mode: 'no-cors', signal: AbortSignal.timeout(3000) });
+                // no-cors gives opaque response, so any non-error means it's reachable
+                setStatus('Connecting...', 'success');
+                window.location.href = decodedText;
+            } catch {
+                setStatus('Server not reachable at ' + url.origin, 'error');
+                checking = false;
+            }
+        }
+
+        const scanner = new Html5QrcodeScanner("reader", {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+            rememberLastUsedCamera: true,
+        }, false);
+
+        scanner.render(onScan, () => {});
+    </script>
+</body>
+</html>

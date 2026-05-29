@@ -1,7 +1,11 @@
 package com.thelightphone.filemanager
 
+import io.ktor.http.ContentType
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
+import io.ktor.server.routing.routing
 import java.io.File
 import java.net.NetworkInterface
 
@@ -40,6 +44,12 @@ fun main() {
         }
     }) {
         module(rootDataProvider, true, apiKey) { _, _, _ -> }
+        routing {
+            get("/qr") {
+                val html = object {}.javaClass.getResource("/qr-scan-test.html")!!.readText()
+                call.respondText(html, ContentType.Text.Html)
+            }
+        }
     }.start(wait = true)
 }
 
