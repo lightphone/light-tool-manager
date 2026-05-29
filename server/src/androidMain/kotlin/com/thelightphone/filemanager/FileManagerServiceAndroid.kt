@@ -1,6 +1,10 @@
 package com.thelightphone.filemanager
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.util.Log
 import io.ktor.server.engine.EmbeddedServer
@@ -20,6 +24,7 @@ class FileManagerServiceAndroid(
     private val context: Context,
     private val port: Int = HTTPS_PORT,
     private val enableLogging: Boolean = false,
+    private val onNetworkLost: (() -> Unit)? = null,
 ) {
 
     companion object {
@@ -28,14 +33,20 @@ class FileManagerServiceAndroid(
 
     private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? =
         null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     var apiKey: String? = null
         private set
 
     val isRunning: Boolean get() = server != null
 
-    fun start() {
-        if (isRunning) return
+    fun start(): Boolean {
+        if (isRunning) return true
+
+        if (!hasLocalNetwork()) {
+            Log.w(TAG, "No WiFi, hotspot, or ethernet connection — refusing to start")
+            return false
+        }
 
         CoroutineScope(Dispatchers.IO).launch { rootDataProvider.refreshProviders() }
 
@@ -70,11 +81,16 @@ class FileManagerServiceAndroid(
             module(rootDataProvider, enableLogging = enableLogging, apiKey = key, logHandler = handler)
         }.start(wait = false)
         server = engine
+
+        registerNetworkMonitor()
+        return true
     }
 
     fun stop() {
+        unregisterNetworkMonitor()
         val s = server
         server = null
+        apiKey = null
         CoroutineScope(Dispatchers.IO).launch {
             s?.stop(1, 5, TimeUnit.SECONDS)
         }
@@ -87,6 +103,42 @@ class FileManagerServiceAndroid(
         if (addr.hostAddress == "0.0.0.0") return null
         val domain = addr.hostAddress!!.replace('.', '-') + ".my.local-ip.co"
         return "https://$domain:$port/#$key"
+    }
+
+    private fun hasLocalNetwork(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    private fun registerNetworkMonitor() {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+            .addTransportType(NetworkCapabilities.TRANSPORT_USB)
+            .build()
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: Network) {
+                if (!hasLocalNetwork()) {
+                    Log.w(TAG, "Local network lost — stopping server")
+                    stop()
+                    onNetworkLost?.invoke()
+                }
+            }
+        }
+        networkCallback = callback
+        cm.registerNetworkCallback(request, callback)
+    }
+
+    private fun unregisterNetworkMonitor() {
+        val cb = networkCallback ?: return
+        networkCallback = null
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        runCatching { cm.unregisterNetworkCallback(cb) }
     }
 
     private fun getWifiAddress(wifi: WifiManager): InetAddress {
