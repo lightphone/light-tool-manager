@@ -74,6 +74,7 @@ kotlin.sourceSets.getByName("jvmSharedMain") {
 
 android.sourceSets.getByName("main") {
     resources.srcDir(copyFrontend.map { layout.buildDirectory.dir("generated/frontend") })
+    resources.srcDir("src/jvmSharedMain/resources")
 }
 
 tasks.matching { it.name == "processReleaseJavaRes" }.configureEach {
