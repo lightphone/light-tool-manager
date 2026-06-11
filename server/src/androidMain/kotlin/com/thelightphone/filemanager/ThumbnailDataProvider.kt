@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaScannerConnection
 import android.media.ThumbnailUtils
-import android.net.Uri
 import android.util.LruCache
 import android.util.Size
 import java.io.ByteArrayInputStream

@@ -56,6 +56,7 @@ kotlin {
         }
 
         androidMain.get().dependencies {
+            implementation(libs.androidx.annotation.jvm)
         }
     }
 }
@@ -77,7 +78,7 @@ android.sourceSets.getByName("main") {
     resources.srcDir("src/jvmSharedMain/resources")
 }
 
-tasks.matching { it.name == "processReleaseJavaRes" }.configureEach {
+tasks.matching { it.name.startsWith("process") && it.name.endsWith("JavaRes") }.configureEach {
     dependsOn(copyFrontend)
 }
 

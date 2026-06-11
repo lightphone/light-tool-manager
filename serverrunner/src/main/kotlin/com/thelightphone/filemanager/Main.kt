@@ -19,7 +19,9 @@ fun main() {
     kotlinx.coroutines.runBlocking { rootDataProvider.refreshProviders() }
 
     val apiKey = generateApiKey()
-    val keyStore = SslConfig.loadKeyStore()
+    val certCacheDir = File(System.getProperty("user.home") ?: ".", ".thelightphone/certs")
+    val sslConfig = SslConfig(logger)
+    val keyStore = sslConfig.loadKeyStore(certCacheDir)
     // not important since we're using local-ip.co's certs which are public
     val keyStorePassword = "changeit"
     val localIp = getLocalIpAddress()
@@ -60,4 +62,19 @@ private fun getLocalIpAddress(): String? {
         .filter { it is java.net.Inet4Address && !it.isLoopbackAddress }
         .map { it.hostAddress }
         .firstOrNull()
+}
+
+val logger = object : Logger {
+    override fun log(tag: String, message: String) {
+        println("Light File Manager - $tag: $message")
+    }
+
+    override fun reportError(
+        tag: String,
+        exception: Exception?,
+        message: String
+    ) {
+        System.err.println("Light File Manager - $tag: $message")
+        exception?.let { System.err.println(it.stackTraceToString()) }
+    }
 }

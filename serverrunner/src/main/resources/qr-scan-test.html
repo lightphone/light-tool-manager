@@ -18,14 +18,14 @@
             padding: 20px;
         }
         h1 { margin-bottom: 16px; font-size: 24px; }
-        #reader { width: 100%; max-width: 500px; }
+        #reader { width: 100%; max-width: 800px; }
         #status {
             margin-top: 16px;
             padding: 12px 20px;
             border-radius: 8px;
             font-size: 16px;
             text-align: center;
-            max-width: 500px;
+            max-width: 800px;
             width: 100%;
             display: none;
         }
@@ -65,7 +65,6 @@
             try {
                 const pingUrl = url.origin + '/ping';
                 const resp = await fetch(pingUrl, { mode: 'no-cors', signal: AbortSignal.timeout(3000) });
-                // no-cors gives opaque response, so any non-error means it's reachable
                 setStatus('Connecting...', 'success');
                 window.location.href = decodedText;
             } catch {
@@ -74,13 +73,23 @@
             }
         }
 
-        const scanner = new Html5QrcodeScanner("reader", {
-            fps: 10,
-            qrbox: { width: 250, height: 250 },
-            rememberLastUsedCamera: true,
-        }, false);
+        async function startScanner() {
+            const devices = await Html5Qrcode.getCameras();
+            if (devices.length === 0) {
+                setStatus('No cameras found', 'error');
+                return;
+            }
 
-        scanner.render(onScan, () => {});
+            const scanner = new Html5Qrcode("reader");
+            scanner.start(
+                devices[0].id,
+                { fps: 10, qrbox: { width: 300, height: 300 } },
+                onScan,
+                () => {}
+            );
+        }
+
+        startScanner();
     </script>
 </body>
 </html>

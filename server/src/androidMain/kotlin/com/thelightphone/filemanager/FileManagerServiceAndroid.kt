@@ -1,12 +1,12 @@
 package com.thelightphone.filemanager
 
+import android.Manifest
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
-import android.util.Log
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.sslConnector
@@ -16,12 +16,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.slf4j.event.Level
+import java.io.File
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 class FileManagerServiceAndroid(
     private val rootDataProvider: RootDataProvider,
     private val context: Context,
+    private val logger: Logger,
     private val port: Int = HTTPS_PORT,
     private val enableLogging: Boolean = false,
     private val onNetworkLost: (() -> Unit)? = null,
@@ -44,7 +46,7 @@ class FileManagerServiceAndroid(
         if (isRunning) return true
 
         if (!hasLocalNetwork()) {
-            Log.w(TAG, "No WiFi, hotspot, or ethernet connection — refusing to start")
+            logger.log(TAG, "No WiFi, hotspot, or ethernet connection — refusing to start")
             return false
         }
 
@@ -52,7 +54,8 @@ class FileManagerServiceAndroid(
 
         val key = generateApiKey()
         apiKey = key
-        val keyStore = SslConfig.loadKeyStore()
+        val sslConfig = SslConfig(logger)
+        val keyStore = sslConfig.loadKeyStore(File(context.filesDir, "certs"))
         // not important since we're using local-ip.co's certs which are public
         val keyStorePassword = "changeit"
 
@@ -69,13 +72,10 @@ class FileManagerServiceAndroid(
         }) {
             val handler = { level: Level, msg: String, throwable: Throwable? ->
                 when (level) {
-                    Level.ERROR -> Log.e(TAG, msg, throwable)
-                    Level.WARN -> Log.w(TAG, msg, throwable)
-                    Level.INFO -> Log.i(TAG, msg)
-                    Level.DEBUG -> Log.d(TAG, msg)
-                    Level.TRACE -> Log.v(TAG, msg)
+                    Level.ERROR -> logger.reportError(TAG, Exception(throwable), msg)
+                    Level.WARN -> logger.reportError(TAG, Exception(throwable), "WARNING: $msg")
+                    Level.INFO,Level.DEBUG,Level.TRACE -> logger.log(TAG, msg)
                 }
-                Unit
             }
 
             module(rootDataProvider, enableLogging = enableLogging, apiKey = key, logHandler = handler)
@@ -99,12 +99,13 @@ class FileManagerServiceAndroid(
     fun getHttpsUrl(): String? {
         val key = apiKey ?: return null
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val addr = getWifiAddress(wifi)
-        if (addr.hostAddress == "0.0.0.0") return null
-        val domain = addr.hostAddress!!.replace('.', '-') + ".my.local-ip.co"
+        val address = getWifiAddress(wifi)
+        if (address.hostAddress == "0.0.0.0") return null
+        val domain = address.hostAddress!!.replace('.', '-') + ".my.local-ip.co"
         return "https://$domain:$port/#$key"
     }
 
+    @androidx.annotation.RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private fun hasLocalNetwork(): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = cm.activeNetwork ?: return false
@@ -124,7 +125,7 @@ class FileManagerServiceAndroid(
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onLost(network: Network) {
                 if (!hasLocalNetwork()) {
-                    Log.w(TAG, "Local network lost — stopping server")
+                    logger.log(TAG, "Local network lost — stopping server")
                     stop()
                     onNetworkLost?.invoke()
                 }

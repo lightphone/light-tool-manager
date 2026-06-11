@@ -15,7 +15,7 @@ plugins {
 
 allprojects {
     group = "com.thelightphone.filemanager"
-    version = "0.0.3"
+    version = "0.0.4"
 
     val localProperties = Properties().apply {
         rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
