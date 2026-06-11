@@ -45,7 +45,7 @@ fun main() {
             host = "0.0.0.0"
         }
     }) {
-        module(rootDataProvider, true, apiKey) { _, _, _ -> }
+        module(rootDataProvider, true, logger, apiKey)
         routing {
             get("/qr") {
                 val html = object {}.javaClass.getResource("/qr-scan-test.html")!!.readText()

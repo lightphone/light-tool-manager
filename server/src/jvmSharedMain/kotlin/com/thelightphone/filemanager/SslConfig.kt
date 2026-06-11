@@ -152,9 +152,7 @@ class SslConfig(private val logger: Logger) {
 
         val fullChain = buildValidatedChain(serverCert, chainCerts)
         if (chainCerts.isNotEmpty() && fullChain.size == 1) {
-            System.err.println(
-                "Light File Manager - chain.pem does not chain to server.pem; serving leaf only"
-            )
+            logger.log(TAG, "chain.pem does not chain to server.pem; serving leaf only")
         }
 
         val privateKey = parsePrivateKey(certs.key)

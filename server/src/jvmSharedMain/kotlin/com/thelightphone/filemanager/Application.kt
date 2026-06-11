@@ -3,14 +3,12 @@ package com.thelightphone.filemanager
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
-import io.ktor.server.engine.logError
 import io.ktor.server.http.content.*
 import io.ktor.server.plugins.calllogging.*
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import io.ktor.util.logging.Logger
 import io.ktor.utils.io.*
 import io.ktor.utils.io.jvm.javaio.*
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +17,6 @@ import kotlinx.serialization.Serializable
 import org.slf4j.Marker
 import org.slf4j.event.Level
 import org.slf4j.helpers.AbstractLogger
-import org.slf4j.helpers.NOPLogger
 import java.io.ByteArrayOutputStream
 import java.nio.file.Path
 import java.time.LocalDateTime
@@ -51,18 +48,22 @@ fun generateApiKey(): String {
     return bytes.joinToString("") { "%02x".format(it) }
 }
 
+private const val TAG = "FileManagerServer"
+
 fun Application.module(
     rootDataProvider: RootDataProvider,
     enableLogging: Boolean,
-    apiKey: String? = null,
-    logHandler: ((Level, String, Throwable?) -> Unit) = { _, _, _ -> }
+    fileManagerLogger: Logger,
+    apiKey: String? = null
 ) {
+
     install(ContentNegotiation) {
         json()
     }
 
     install(CallLogging) {
         logger = object : AbstractLogger() {
+
             override fun getFullyQualifiedCallerName(): String = "ktor"
 
             override fun handleNormalizedLoggingCall(
@@ -75,7 +76,18 @@ fun Application.module(
                 if (message != null && level != null) {
                     // Strip ANSI escape codes (e.g. color codes like [31m)
                     val clean = message.replace(Regex("\u001B\\[[;\\d]*m"), "")
-                    logHandler(level, clean, throwable)
+                    when (level) {
+                        Level.ERROR -> fileManagerLogger.reportError(
+                            TAG,
+                            throwable?.let { Exception(it) },
+                            clean
+                        )
+
+                        Level.INFO, Level.DEBUG, Level.TRACE, Level.WARN -> fileManagerLogger.log(
+                            TAG,
+                            clean
+                        )
+                    }
                 }
             }
 
@@ -108,7 +120,7 @@ fun Application.module(
             }
         }
     } else {
-        System.err.println("WARNING: File Manager server running with no api key!")
+        fileManagerLogger.log(TAG, "WARNING: File Manager server running with no api key!")
     }
 
     val downloadTokenManager = DownloadTokenManager()
@@ -250,7 +262,7 @@ fun Application.module(
             }.fold(
                 onSuccess = { call.respond(HttpStatusCode.OK) },
                 onFailure = { t ->
-                    logHandler?.invoke(Level.ERROR, "Error uploading", t)
+                    fileManagerLogger.reportError(TAG, t.loggable(), "Error uploading")
                     call.respondError(t)
                 }
             )
@@ -341,7 +353,12 @@ fun Application.module(
 
             call.respondBytesWriter {
                 withContext(Dispatchers.IO) {
-                    streamFilesToZip(this@respondBytesWriter, session.paths, rootDataProvider)
+                    streamFilesToZip(
+                        this@respondBytesWriter,
+                        session.paths,
+                        rootDataProvider,
+                        fileManagerLogger
+                    )
                 }
             }
         }
@@ -361,7 +378,8 @@ private suspend fun ApplicationCall.respondError(error: Throwable) {
 private suspend fun streamFilesToZip(
     output: ByteWriteChannel,
     paths: List<String>,
-    dataProvider: DataProvider
+    dataProvider: DataProvider,
+    fileManagerLogger: Logger
 ) {
     val zipBuffer = ByteArrayOutputStream(32768)
     val zipOutput = ZipOutputStream(zipBuffer)
@@ -382,7 +400,7 @@ private suspend fun streamFilesToZip(
                     }
                 }
             } catch (e: Exception) {
-                println("Failed to add $filePath to zip: ${e.message}")
+                fileManagerLogger.reportError(TAG, e, "Failed to add path to zip")
             }
         }
 

@@ -7,6 +7,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
+import androidx.annotation.RequiresPermission
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.sslConnector
@@ -15,7 +16,6 @@ import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.slf4j.event.Level
 import java.io.File
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
@@ -42,6 +42,7 @@ class FileManagerServiceAndroid(
 
     val isRunning: Boolean get() = server != null
 
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     fun start(): Boolean {
         if (isRunning) return true
 
@@ -70,15 +71,12 @@ class FileManagerServiceAndroid(
                 host = "0.0.0.0"
             }
         }) {
-            val handler = { level: Level, msg: String, throwable: Throwable? ->
-                when (level) {
-                    Level.ERROR -> logger.reportError(TAG, Exception(throwable), msg)
-                    Level.WARN -> logger.reportError(TAG, Exception(throwable), "WARNING: $msg")
-                    Level.INFO,Level.DEBUG,Level.TRACE -> logger.log(TAG, msg)
-                }
-            }
-
-            module(rootDataProvider, enableLogging = enableLogging, apiKey = key, logHandler = handler)
+            module(
+                rootDataProvider,
+                enableLogging = enableLogging,
+                apiKey = key,
+                fileManagerLogger = logger
+            )
         }.start(wait = false)
         server = engine
 
@@ -105,7 +103,7 @@ class FileManagerServiceAndroid(
         return "https://$domain:$port/#$key"
     }
 
-    @androidx.annotation.RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private fun hasLocalNetwork(): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = cm.activeNetwork ?: return false
@@ -114,6 +112,7 @@ class FileManagerServiceAndroid(
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
 
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private fun registerNetworkMonitor() {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val request = NetworkRequest.Builder()
@@ -123,6 +122,7 @@ class FileManagerServiceAndroid(
             .build()
 
         val callback = object : ConnectivityManager.NetworkCallback() {
+            @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
             override fun onLost(network: Network) {
                 if (!hasLocalNetwork()) {
                     logger.log(TAG, "Local network lost — stopping server")

@@ -9,6 +9,21 @@ import kotlin.test.*
 
 class ApplicationTest {
 
+    private val logger = object : Logger {
+        override fun log(tag: String, message: String) {
+            println("$tag: $message")
+        }
+
+        override fun reportError(
+            tag: String,
+            exception: Exception?,
+            message: String
+        ) {
+            System.err.println("$tag: $message")
+            exception?.let { System.err.println(it.stackTraceToString()) }
+        }
+    }
+
     @Test
     fun testRootEndpoint() = testApplication {
         val tempDir = File(System.getProperty("java.io.tmpdir"), "apptest-${System.nanoTime()}")
@@ -19,7 +34,7 @@ class ApplicationTest {
             rootProvider.refreshProviders()
 
             application {
-                module(rootProvider, false)
+                module(rootProvider, false, logger)
             }
             val response = client.get("/api/root")
             assertEquals(HttpStatusCode.OK, response.status)
