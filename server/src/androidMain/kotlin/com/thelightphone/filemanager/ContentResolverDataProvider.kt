@@ -5,7 +5,6 @@ import android.content.ContentValues
 import android.net.Uri
 import android.provider.OpenableColumns
 import java.io.InputStream
-import java.io.OutputStream
 import java.nio.file.Path
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -76,10 +75,14 @@ class ContentResolverDataProvider(
             ?: throw NoSuchElementException("Could not open: $filePath")
     }
 
-    override fun openWrite(filePath: Path): Result<OutputStream> = runCatching {
+    override fun openWrite(filePath: Path): Result<WriteTarget> = runCatching {
         val uri = pathToUri(filePath)
-        contentResolver.openOutputStream(uri)
+        val stream = contentResolver.openOutputStream(uri)
             ?: throw IllegalStateException("Could not open for writing: $filePath")
+        WriteTarget(
+            outputStream = stream,
+            onRollback = { contentResolver.delete(uri, null, null) }
+        )
     }
 
     override suspend fun getThumbnailBytes(filePath: Path, type: EntryType): Result<InputStream> {

@@ -8,6 +8,8 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isReadable
@@ -23,6 +25,18 @@ sealed interface WriteCheck {
     data object DirectoryExists : WriteCheck
     data object InvalidPath : WriteCheck
     data object ReadOnly : WriteCheck
+}
+
+// Lets a DataProvider stage a write and only make it visible (commit) once the
+// caller-supplied block finishes successfully, so an aborted upload can roll
+// back instead of leaving partial data at the destination path.
+class WriteTarget(
+    val outputStream: OutputStream,
+    private val onCommit: () -> Unit = {},
+    private val onRollback: () -> Unit = {}
+) {
+    fun commit() = onCommit()
+    fun rollback() = onRollback()
 }
 
 interface DataProvider {
@@ -172,7 +186,7 @@ abstract class CachingDataProvider(
 
     protected abstract fun listEntries(path: Path): Result<List<Entry>>
     protected abstract fun openRead(filePath: Path): Result<InputStream>
-    protected abstract fun openWrite(filePath: Path): Result<OutputStream>
+    protected abstract fun openWrite(filePath: Path): Result<WriteTarget>
     protected abstract fun performDelete(filePath: Path): Result<Int>
     protected abstract fun performRename(filePath: Path, newName: String): Result<Boolean>
     protected abstract fun performCheckWrite(filePath: Path): WriteCheck
@@ -262,9 +276,14 @@ abstract class CachingDataProvider(
             WriteCheck.ReadOnly -> Result.failure(SecurityException("Path is read-only: $filePath"))
             WriteCheck.Safe, is WriteCheck.FileExists -> {
                 invalidateParentCache(filePath)
-                runCatching {
-                    openWrite(filePath).getOrThrow().use { block(it) }
-                }
+                openWrite(filePath).fold(
+                    onSuccess = { target ->
+                        runCatching { target.outputStream.use { block(it) } }
+                            .onSuccess { target.commit() }
+                            .onFailure { target.rollback() }
+                    },
+                    onFailure = { Result.failure(it) }
+                )
             }
         }
     }
@@ -340,9 +359,24 @@ open class FileDataProvider(
         }
     }
 
-    override fun openWrite(filePath: Path): Result<OutputStream> {
+    override fun openWrite(filePath: Path): Result<WriteTarget> = runCatching {
         val resolved = root.toPath().resolve(filePath).normalize()
-        return Result.success(Files.newOutputStream(resolved))
+        // Write to a temp file in the same directory and only move it into place once
+        // the upload finishes successfully so an aborted upload never leaves a
+        // truncated/partial file at the destination path.
+        val tempFile = Files.createTempFile(resolved.parent, "${resolved.fileName}.", ".part")
+        WriteTarget(
+            outputStream = Files.newOutputStream(tempFile, StandardOpenOption.TRUNCATE_EXISTING),
+            onCommit = {
+                Files.move(
+                    tempFile,
+                    resolved,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE
+                )
+            },
+            onRollback = { Files.deleteIfExists(tempFile) }
+        )
     }
 
     protected open fun getImageThumbnail(filePath: Path): Result<InputStream>? {

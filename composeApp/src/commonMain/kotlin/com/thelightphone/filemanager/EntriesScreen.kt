@@ -44,6 +44,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
@@ -52,6 +53,7 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.minutes
 
 @Composable
 fun EntriesScreen(
@@ -141,6 +143,9 @@ fun EntriesScreen(
                 val response = client.post("${getBaseUrl()}/api/upload/$currentPath/$fileName") {
                     contentType(ContentType.Application.OctetStream)
                     setBody(ByteReadChannel(bytes))
+                    timeout {
+                        requestTimeoutMillis = 5.minutes.inWholeMilliseconds
+                    }
                 }
                 if (response.status.isSuccess()) {
                     client.post("${getBaseUrl()}/api/notify/$currentPath")

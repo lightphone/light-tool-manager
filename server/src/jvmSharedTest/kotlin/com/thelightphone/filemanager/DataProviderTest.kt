@@ -311,6 +311,32 @@ class DataProviderTest {
     }
 
     @Test
+    fun `writeBytes leaves no partial file when block throws for a new file`() = runBlocking {
+        val provider = createProvider()
+        val result = provider.writeBytes(Path.of("aborted.txt")) { out ->
+            out.write("partial".toByteArray())
+            throw java.io.IOException("connection reset")
+        }
+        assertTrue(result.isFailure)
+        assertFalse(File(tempDir, "aborted.txt").exists())
+        assertEquals(0, tempDir.listFiles()?.size ?: 0)
+    }
+
+    @Test
+    fun `writeBytes leaves original file untouched when overwrite block throws`() = runBlocking {
+        File(tempDir, "existing.txt").writeText("old content")
+
+        val provider = createProvider()
+        val result = provider.writeBytes(Path.of("existing.txt")) { out ->
+            out.write("partial".toByteArray())
+            throw java.io.IOException("connection reset")
+        }
+        assertTrue(result.isFailure)
+        assertEquals("old content", File(tempDir, "existing.txt").readText())
+        assertEquals(1, tempDir.listFiles()?.size ?: 0)
+    }
+
+    @Test
     fun `writeBytes fails for directory path`() = runBlocking {
         File(tempDir, "mydir").mkdir()
 
