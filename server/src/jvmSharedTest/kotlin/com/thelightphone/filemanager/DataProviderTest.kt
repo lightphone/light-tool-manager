@@ -13,6 +13,9 @@ class DataProviderTest {
     private fun createProvider(): FileDataProvider =
         FileDataProvider(root = tempDir, defaultThumbnails = emptyMap())
 
+    private fun createProvider(readRoots: List<File>, writeRoot: File): FileDataProvider =
+        FileDataProvider(readRoots = readRoots, writeRoot = writeRoot, defaultThumbnails = emptyMap())
+
     private fun createRootProvider(vararg named: Pair<String, FileDataProvider>): RootDataProvider {
         val map = named.toMap()
         return RootDataProvider { map }.also { runBlocking { it.refreshProviders() } }
@@ -589,5 +592,118 @@ class DataProviderTest {
         assertTrue(result.isFailure)
         assertIs<NoSuchElementException>(result.exceptionOrNull())
         Unit
+    }
+
+    // -- Multi-root FileDataProvider tests --
+
+    @Test
+    fun `multiple read roots merge entries into a single listing`() = runBlocking {
+        val rootA = File(tempDir, "a").apply { mkdir() }
+        val rootB = File(tempDir, "b").apply { mkdir() }
+        File(rootA, "from-a.txt").writeText("a")
+        File(rootB, "from-b.txt").writeText("b")
+
+        val provider = createProvider(readRoots = listOf(rootA, rootB), writeRoot = rootA)
+        val entries = provider.getDirectoryForPath(Path.of("."), PageRequest()).getOrThrow().data
+
+        assertEquals(setOf("from-a.txt", "from-b.txt"), entries.map { it.title }.toSet())
+    }
+
+    @Test
+    fun `duplicate paths across read roots are deduped in favor of the first root`() = runBlocking {
+        val rootA = File(tempDir, "a").apply { mkdir() }
+        val rootB = File(tempDir, "b").apply { mkdir() }
+        File(rootA, "same.txt").writeText("from a")
+        File(rootB, "same.txt").writeText("from b")
+
+        val provider = createProvider(readRoots = listOf(rootA, rootB), writeRoot = rootA)
+        val entries = provider.getDirectoryForPath(Path.of("."), PageRequest()).getOrThrow().data
+        assertEquals(1, entries.size)
+
+        val bytes = provider.getBytes(Path.of("same.txt")).getOrThrow()
+        assertEquals("from a", bytes.bufferedReader().readText())
+    }
+
+    @Test
+    fun `getBytes falls through to a later read root when not found in the first`() = runBlocking {
+        val rootA = File(tempDir, "a").apply { mkdir() }
+        val rootB = File(tempDir, "b").apply { mkdir() }
+        File(rootB, "only-in-b.txt").writeText("b content")
+
+        val provider = createProvider(readRoots = listOf(rootA, rootB), writeRoot = rootA)
+        val result = provider.getBytes(Path.of("only-in-b.txt"))
+        assertEquals("b content", result.getOrThrow().bufferedReader().readText())
+    }
+
+    @Test
+    fun `writes always land in the write root regardless of read root order`() = runBlocking {
+        val rootA = File(tempDir, "a").apply { mkdir() }
+        val rootB = File(tempDir, "b").apply { mkdir() }
+
+        val provider = createProvider(readRoots = listOf(rootA, rootB), writeRoot = rootB)
+        val result = provider.writeBytes(Path.of("uploaded.txt")) { out ->
+            out.write("new data".toByteArray())
+        }
+
+        assertTrue(result.isSuccess)
+        assertFalse(File(rootA, "uploaded.txt").exists())
+        assertEquals("new data", File(rootB, "uploaded.txt").readText())
+    }
+
+    @Test
+    fun `checkWrite reports FileExists for a collision in a non-write read root`() = runBlocking {
+        val rootA = File(tempDir, "a").apply { mkdir() }
+        val rootB = File(tempDir, "b").apply { mkdir() }
+        File(rootA, "existing.txt").writeText("data")
+
+        val provider = createProvider(readRoots = listOf(rootA, rootB), writeRoot = rootB)
+        val check = provider.checkWrite(Path.of("existing.txt"))
+        assertIs<WriteCheck.FileExists>(check)
+        assertEquals("existing.txt", check.existing.title)
+    }
+
+    @Test
+    fun `writing into a folder that only exists in another read root creates it in the write root`() = runBlocking {
+        val rootA = File(tempDir, "a").apply { mkdir() }
+        val rootB = File(tempDir, "b").apply { mkdir() }
+        File(rootA, "photos").mkdir()
+
+        val provider = createProvider(readRoots = listOf(rootA, rootB), writeRoot = rootB)
+        assertIs<WriteCheck.Safe>(provider.checkWrite(Path.of("photos/new.jpg")))
+
+        val result = provider.writeBytes(Path.of("photos/new.jpg")) { out ->
+            out.write("img".toByteArray())
+        }
+        assertTrue(result.isSuccess)
+        assertEquals("img", File(rootB, "photos/new.jpg").readText())
+        assertFalse(File(rootA, "photos/new.jpg").exists())
+    }
+
+    @Test
+    fun `delete removes a file from whichever read root it lives in`() = runBlocking {
+        val rootA = File(tempDir, "a").apply { mkdir() }
+        val rootB = File(tempDir, "b").apply { mkdir() }
+        File(rootA, "doomed.txt").writeText("bye")
+
+        val provider = createProvider(readRoots = listOf(rootA, rootB), writeRoot = rootB)
+        val result = provider.delete(Path.of("doomed.txt"))
+
+        assertTrue(result.isSuccess)
+        assertFalse(File(rootA, "doomed.txt").exists())
+    }
+
+    @Test
+    fun `rename operates within the source root the file was found in`() = runBlocking {
+        val rootA = File(tempDir, "a").apply { mkdir() }
+        val rootB = File(tempDir, "b").apply { mkdir() }
+        File(rootA, "old.txt").writeText("content")
+
+        val provider = createProvider(readRoots = listOf(rootA, rootB), writeRoot = rootB)
+        val result = provider.rename(Path.of("old.txt"), "new.txt")
+
+        assertTrue(result.isSuccess)
+        assertFalse(File(rootA, "old.txt").exists())
+        assertTrue(File(rootA, "new.txt").exists())
+        assertFalse(File(rootB, "new.txt").exists())
     }
 }

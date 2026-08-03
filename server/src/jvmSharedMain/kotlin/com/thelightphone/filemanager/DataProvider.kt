@@ -313,7 +313,8 @@ abstract class CachingDataProvider(
 }
 
 open class FileDataProvider(
-    protected val root: File,
+    protected val readRoots: List<File>,
+    protected val writeRoot: File,
     private val defaultThumbnails: Map<EntryType, File>,
     readOnly: Boolean = false,
     showHiddenFiles: Boolean = false,
@@ -321,7 +322,16 @@ open class FileDataProvider(
     timeNow: () -> Instant = { Clock.System.now() }
 ) : CachingDataProvider(readOnly, showHiddenFiles, cacheTtl, timeNow) {
 
-    private fun resolveAndValidate(path: Path): Result<Path> {
+    constructor(
+        root: File,
+        defaultThumbnails: Map<EntryType, File>,
+        readOnly: Boolean = false,
+        showHiddenFiles: Boolean = false,
+        cacheTtl: Duration = 5.minutes,
+        timeNow: () -> Instant = { Clock.System.now() }
+    ) : this(listOf(root), root, defaultThumbnails, readOnly, showHiddenFiles, cacheTtl, timeNow)
+
+    private fun resolveAndValidate(path: Path, root: File): Result<Path> {
         val resolved = try {
             root.toPath().resolve(path).toRealPath()
         } catch (_: java.nio.file.NoSuchFileException) {
@@ -336,22 +346,46 @@ open class FileDataProvider(
         return Result.success(resolved)
     }
 
-    override fun listEntries(path: Path): Result<List<Entry>> {
-        return resolveAndValidate(path).mapCatching { dir ->
-            if (!dir.isDirectory()) {
-                throw IllegalArgumentException("Not a directory: $path")
-            }
-            Files.list(dir).use { stream ->
-                stream
-                    .filter { !Files.isSymbolicLink(it) }
-                    .map { it.toEntry(root.toPath()) }
-                    .toList()
-            }
+    // Reads can come from any source root; the first root (in order) that has the
+    // path wins. Used for everything except new-file writes, which always target writeRoot.
+    private fun findInReadRoots(path: Path): Result<Pair<Path, File>> {
+        var lastFailure: Throwable = NoSuchElementException("Path not found: $path")
+        for (root in readRoots) {
+            val result = resolveAndValidate(path, root)
+            if (result.isSuccess) return result.map { it to root }
+            lastFailure = result.exceptionOrNull() ?: lastFailure
         }
+        return Result.failure(lastFailure)
+    }
+
+    override fun listEntries(path: Path): Result<List<Entry>> {
+        var anySuccess = false
+        var lastFailure: Throwable = NoSuchElementException("Path not found: $path")
+        // Merge listings from every root that has this subpath; first root wins on name collisions.
+        val merged = LinkedHashMap<String, Entry>()
+        for (root in readRoots) {
+            resolveAndValidate(path, root).mapCatching { dir ->
+                if (!dir.isDirectory()) {
+                    throw IllegalArgumentException("Not a directory: $path")
+                }
+                Files.list(dir).use { stream ->
+                    stream
+                        .filter { !Files.isSymbolicLink(it) }
+                        .map { it.toEntry(root.toPath()) }
+                        .toList()
+                }
+            }.onSuccess { entries ->
+                anySuccess = true
+                // Keyed by title (not entry.path): all entries here are siblings within the
+                // same listed directory, so the filename alone identifies a collision.
+                entries.forEach { entry -> merged.putIfAbsent(entry.title, entry) }
+            }.onFailure { lastFailure = it }
+        }
+        return if (anySuccess) Result.success(merged.values.toList()) else Result.failure(lastFailure)
     }
 
     override fun openRead(filePath: Path): Result<InputStream> {
-        return resolveAndValidate(filePath).mapCatching { resolved ->
+        return findInReadRoots(filePath).mapCatching { (resolved, _) ->
             if (resolved.isDirectory()) {
                 throw IllegalArgumentException("Cannot read bytes from a directory: $filePath")
             }
@@ -360,7 +394,10 @@ open class FileDataProvider(
     }
 
     override fun openWrite(filePath: Path): Result<WriteTarget> = runCatching {
-        val resolved = root.toPath().resolve(filePath).normalize()
+        val resolved = writeRoot.toPath().resolve(filePath).normalize()
+        // The parent may only exist virtually (in another source root) at this point,
+        // since checkWrite treats those as valid write targets too.
+        Files.createDirectories(resolved.parent)
         // Write to a temp file in the same directory and only move it into place once
         // the upload finishes successfully so an aborted upload never leaves a
         // truncated/partial file at the destination path.
@@ -408,7 +445,8 @@ open class FileDataProvider(
     }
 
     override fun performDelete(filePath: Path): Result<Int> {
-        return resolveAndValidate(filePath).mapCatching { resolved ->
+        // Deletes operate on whichever source root actually holds the file, not just writeRoot.
+        return findInReadRoots(filePath).mapCatching { (resolved, _) ->
             if (resolved.isDirectory()) {
                 resolved.toFile().walkBottomUp().count { it.delete() }
             } else {
@@ -418,7 +456,8 @@ open class FileDataProvider(
     }
 
     override fun performRename(filePath: Path, newName: String): Result<Boolean> {
-        return resolveAndValidate(filePath).mapCatching { resolved ->
+        // Renames stay within whichever source root the file was found in.
+        return findInReadRoots(filePath).mapCatching { (resolved, root) ->
             val dest = resolved.resolveSibling(newName)
             if (!dest.parent.startsWith(root.toPath().toRealPath())) {
                 throw SecurityException("Path traversal not allowed")
@@ -431,22 +470,28 @@ open class FileDataProvider(
     }
 
     override fun performCheckWrite(filePath: Path): WriteCheck {
-        val rootPath = root.toPath()
-        val normalized = rootPath.resolve(filePath).normalize()
-        if (!normalized.startsWith(rootPath.normalize())) {
+        val writeRootPath = writeRoot.toPath().normalize()
+        val normalized = writeRootPath.resolve(filePath).normalize()
+        if (!normalized.startsWith(writeRootPath)) {
             return WriteCheck.InvalidPath
         }
-        val parent = normalized.parent
-        if (parent == null || !Files.isDirectory(parent)) {
+        val parent = normalized.parent ?: return WriteCheck.InvalidPath
+        // The parent is a valid write target if it exists in writeRoot already, or if it
+        // exists virtually via one of the other source roots (openWrite will create it).
+        val parentExists = Files.isDirectory(parent) || readRoots.any { root ->
+            resolveAndValidate(writeRootPath.relativize(parent), root).getOrNull()?.isDirectory() == true
+        }
+        if (!parentExists) {
             return WriteCheck.InvalidPath
         }
-        if (!Files.exists(normalized)) {
-            return WriteCheck.Safe
+        findInReadRoots(filePath).getOrNull()?.let { (resolved, root) ->
+            return if (resolved.isDirectory()) {
+                WriteCheck.DirectoryExists
+            } else {
+                WriteCheck.FileExists(resolved.toEntry(root.toPath()))
+            }
         }
-        if (Files.isDirectory(normalized)) {
-            return WriteCheck.DirectoryExists
-        }
-        return WriteCheck.FileExists(normalized.toEntry(rootPath))
+        return WriteCheck.Safe
     }
 }
 
@@ -472,10 +517,13 @@ private val Path.entryType: EntryType
 
 private fun Path.toEntry(rootPath: Path): Entry {
     val attrs = Files.readAttributes(this, java.nio.file.attribute.BasicFileAttributes::class.java)
+    // `this` is always a resolved real path (see resolveAndValidate), so rootPath must be
+    // resolved too before relativizing, or a symlinked root (e.g. macOS's /tmp) produces
+    // a garbled relative path instead of a clean one.
     return Entry(
         type = entryType,
         title = name,
-        path = rootPath.relativize(this).toString(),
+        path = rootPath.toRealPath().relativize(this).toString(),
         lastModified = attrs.lastModifiedTime().toMillis(),
         size = if (attrs.isDirectory) 0L else attrs.size()
     )

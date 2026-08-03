@@ -11,9 +11,14 @@ import java.net.NetworkInterface
 
 fun main() {
     val resourceRoot = File(object {}.javaClass.getResource("/sample")!!.toURI())
-    val providers = resourceRoot.listFiles { file -> file.isDirectory }
-        .orEmpty()
+    val uploadsDir = resourceRoot.resolve("uploads").apply{ mkdirs() }
+    val allDirs = resourceRoot.listFiles { file -> file.isDirectory }.orEmpty().toList()
+    val providers = allDirs
         .associate { dir -> dir.name to FileDataProvider(dir, emptyMap()) as DataProvider }
+        .toMutableMap()
+
+    val wrappedProvider = FileDataProvider(allDirs, uploadsDir, emptyMap())
+    providers["all"] = wrappedProvider
 
     val rootDataProvider = RootDataProvider { providers }
     kotlinx.coroutines.runBlocking { rootDataProvider.refreshProviders() }

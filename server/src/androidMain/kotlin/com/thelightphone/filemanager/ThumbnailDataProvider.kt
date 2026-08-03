@@ -15,7 +15,7 @@ import java.nio.file.Path
 
 
 class ThumbnailDataProvider(
-    root: File,
+    private val root: File,
     private val context: Context,
     defaultThumbnails: Map<EntryType, File>,
     readOnly: Boolean = false,
