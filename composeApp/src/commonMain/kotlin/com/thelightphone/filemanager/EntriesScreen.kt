@@ -55,13 +55,18 @@ import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.minutes
 
+// Handles FileBrowserSpec/DropboxSpec/ConfiguratorSpec pages (any DataViewSpec that isn't a
+// RootViewSpec) until those get their own dedicated screens. Owns subfolder drill-down
+// internally: onBack only bubbles up once the user backs out of the page's own root.
 @Composable
 fun EntriesScreen(
     client: HttpClient,
-    currentPath: String,
-    onNavigateTo: (String) -> Unit,
+    spec: DataViewSpec,
     onBack: () -> Unit
 ) {
+    val rootPath = remember(spec) { spec.path.joinToString("/") }
+    var currentPath by remember(spec) { mutableStateOf(rootPath) }
+
     var allEntries by remember(currentPath) { mutableStateOf<List<Entry>>(emptyList()) }
     var isLoading by remember(currentPath) { mutableStateOf(true) }
     var isLoadingMore by remember(currentPath) { mutableStateOf(false) }
@@ -73,7 +78,6 @@ fun EntriesScreen(
     var isUploading by remember(currentPath) { mutableStateOf(false) }
     val pageSize = 20
 
-    val gridState = rememberLazyGridState()
     val coroutineScope = rememberCoroutineScope()
 
     fun loadEntries(page: Int, append: Boolean = false) {
@@ -156,6 +160,74 @@ fun EntriesScreen(
         }
     }
 
+    // Initial load + fetch meta
+    LaunchedEffect(currentPath) {
+        loadEntries(1)
+        isReadOnly = runCatching {
+            val meta: DirectoryMeta = client.get("${getBaseUrl()}/api/meta/$currentPath").body()
+            meta.readOnly
+        }.getOrElse { true }
+    }
+
+    fun navigateBack() {
+        if (currentPath == rootPath) {
+            onBack()
+        } else {
+            currentPath = currentPath.substringBeforeLast("/")
+        }
+    }
+
+    EntriesScreenContent(
+        currentPath = currentPath,
+        entries = allEntries,
+        isLoading = isLoading,
+        isLoadingMore = isLoadingMore,
+        error = error,
+        hasMorePages = hasMorePages,
+        selectedPaths = selectedPaths,
+        isReadOnly = isReadOnly,
+        isUploading = isUploading,
+        onBack = ::navigateBack,
+        onRetry = { loadEntries(currentPage) },
+        onLoadMore = { loadEntries(currentPage + 1, append = true) },
+        onEntryClick = { entry ->
+            if (entry.type == EntryType.Directory) {
+                // entry.path is already the full absolute path from the server, not relative
+                // to currentPath, so it can be used directly as the new location.
+                currentPath = entry.path
+            } else {
+                toggleSelection(entry.path)
+            }
+        },
+        onClearSelection = { selectedPaths = emptySet() },
+        onDownloadSelected = ::downloadSelected,
+        onUpload = ::uploadFile
+    )
+}
+
+// Renders EntriesScreen from plain state and callbacks, with no HttpClient dependency,
+// so it can be driven by fake data in a @Preview.
+@Composable
+fun EntriesScreenContent(
+    currentPath: String,
+    entries: List<Entry>,
+    isLoading: Boolean,
+    isLoadingMore: Boolean,
+    error: String?,
+    hasMorePages: Boolean,
+    selectedPaths: Set<String>,
+    isReadOnly: Boolean,
+    isUploading: Boolean,
+    onBack: () -> Unit,
+    onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
+    onEntryClick: (Entry) -> Unit,
+    onClearSelection: () -> Unit,
+    onDownloadSelected: () -> Unit,
+    onUpload: (fileName: String, bytes: ByteArray) -> Unit
+) {
+    val gridState = rememberLazyGridState()
+
     // Infinite scroll
     LaunchedEffect(gridState, currentPath) {
         snapshotFlow {
@@ -165,18 +237,9 @@ fun EntriesScreen(
             lastVisibleItemIndex >= totalItemsNumber - 3
         }.collect { shouldLoadMore ->
             if (shouldLoadMore && !isLoadingMore && hasMorePages && !isLoading) {
-                loadEntries(currentPage + 1, append = true)
+                onLoadMore()
             }
         }
-    }
-
-    // Initial load + fetch meta
-    LaunchedEffect(currentPath) {
-        loadEntries(1)
-        isReadOnly = runCatching {
-            val meta: DirectoryMeta = client.get("${getBaseUrl()}/api/meta/$currentPath").body()
-            meta.readOnly
-        }.getOrElse { true }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -192,7 +255,7 @@ fun EntriesScreen(
             }
             if (!isReadOnly) {
                 Button(
-                    onClick = { triggerFilePicker { name, bytes -> uploadFile(name, bytes) } },
+                    onClick = { triggerFilePicker { name, bytes -> onUpload(name, bytes) } },
                     enabled = !isUploading
                 ) {
                     Text(if (isUploading) "Uploading..." else "Upload")
@@ -215,10 +278,10 @@ fun EntriesScreen(
                     color = MaterialTheme.colorScheme.primary
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { selectedPaths = emptySet() }) {
+                    Button(onClick = onClearSelection) {
                         Text("Clear")
                     }
-                    Button(onClick = ::downloadSelected) {
+                    Button(onClick = onDownloadSelected) {
                         Text("Download ZIP")
                     }
                 }
@@ -240,30 +303,24 @@ fun EntriesScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     Text(
-                        error!!,
+                        error,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(16.dp),
                         textAlign = TextAlign.Center
                     )
-                    Button(onClick = { loadEntries(currentPage) }) {
+                    Button(onClick = onRetry) {
                         Text("Retry")
                     }
                 }
             }
             else -> {
                 EntryList(
-                    entries = allEntries,
+                    entries = entries,
                     gridState = gridState,
                     isLoadingMore = isLoadingMore,
                     hasMorePages = hasMorePages,
                     selectedPaths = selectedPaths,
-                    onEntryClick = { entry ->
-                        if (entry.type == EntryType.Directory) {
-                            onNavigateTo(entry.path)
-                        } else {
-                            toggleSelection(entry.path)
-                        }
-                    }
+                    onEntryClick = onEntryClick
                 )
             }
         }
@@ -407,5 +464,87 @@ fun EntryListPreview() {
                 onEntryClick = {}
             )
         }
+    }
+}
+
+private val previewEntries = listOf(
+    Entry(EntryType.Directory, "vacation", "photos/vacation", 0L, 0L),
+    Entry(EntryType.Image, "photo.jpg", "photos/photo.jpg", 0L, 1024L),
+    Entry(EntryType.Audio, "song.mp3", "photos/song.mp3", 0L, 4096L),
+    Entry(EntryType.Text, "notes.txt", "photos/notes.txt", 0L, 256L),
+)
+
+@Preview(device = Devices.DESKTOP)
+@Composable
+fun EntriesScreenContentPreview() {
+    AppTheme {
+        EntriesScreenContent(
+            currentPath = "photos",
+            entries = previewEntries,
+            isLoading = false,
+            isLoadingMore = false,
+            error = null,
+            hasMorePages = true,
+            selectedPaths = setOf("photos/photo.jpg"),
+            isReadOnly = false,
+            isUploading = false,
+            onBack = {},
+            onRetry = {},
+            onLoadMore = {},
+            onEntryClick = {},
+            onClearSelection = {},
+            onDownloadSelected = {},
+            onUpload = { _, _ -> }
+        )
+    }
+}
+
+@Preview(device = Devices.DESKTOP)
+@Composable
+fun EntriesScreenContentLoadingPreview() {
+    AppTheme {
+        EntriesScreenContent(
+            currentPath = "photos",
+            entries = emptyList(),
+            isLoading = true,
+            isLoadingMore = false,
+            error = null,
+            hasMorePages = false,
+            selectedPaths = emptySet(),
+            isReadOnly = true,
+            isUploading = false,
+            onBack = {},
+            onRetry = {},
+            onLoadMore = {},
+            onEntryClick = {},
+            onClearSelection = {},
+            onDownloadSelected = {},
+            onUpload = { _, _ -> }
+        )
+    }
+}
+
+@Preview(device = Devices.DESKTOP)
+@Composable
+fun EntriesScreenContentErrorPreview() {
+    AppTheme {
+        EntriesScreenContent(
+            currentPath = "photos",
+            entries = emptyList(),
+            isLoading = false,
+            isLoadingMore = false,
+            error = "Failed to load: connection refused",
+            hasMorePages = false,
+            selectedPaths = emptySet(),
+            isReadOnly = true,
+            isUploading = false,
+            onBack = {},
+            onRetry = {},
+            onLoadMore = {},
+            onEntryClick = {},
+            onClearSelection = {},
+            onDownloadSelected = {},
+            onUpload = { _, _ -> }
+        )
     }
 }

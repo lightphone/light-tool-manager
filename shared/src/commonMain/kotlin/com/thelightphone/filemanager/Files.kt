@@ -3,9 +3,6 @@ package com.thelightphone.filemanager
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class Root(val paths: List<String>)
-
-@Serializable
 enum class EntryType{
     Directory, GenericFile, Audio, Image, Video, Text
 }

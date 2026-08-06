@@ -14,14 +14,14 @@ import java.io.OutputStream
 import java.nio.file.Path
 
 
-class ThumbnailDataProvider(
+class ThumbnailFileTree(
     private val root: File,
     private val context: Context,
     defaultThumbnails: Map<EntryType, File>,
     readOnly: Boolean = false,
     maxCacheSizeBytes: Int = 16 * 1024 * 1024,
     private val thumbnailSizePx: Int = 512
-) : FileDataProvider(root, defaultThumbnails, readOnly = readOnly) {
+) : FileFileTree(root, defaultThumbnails, readOnly = readOnly) {
     private val uploadedFiles = mutableSetOf<Path>()
 
     private val cache = object : LruCache<String, ByteArray>(maxCacheSizeBytes) {

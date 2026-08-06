@@ -21,7 +21,7 @@ import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 class FileManagerServiceAndroid(
-    private val rootDataProvider: RootDataProvider,
+    private val rootDataProvider: RootFileTree,
     private val context: Context,
     private val logger: Logger,
     private val port: Int = HTTPS_PORT,

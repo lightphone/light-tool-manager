@@ -13,14 +13,20 @@ fun main() {
     val resourceRoot = File(object {}.javaClass.getResource("/sample")!!.toURI())
     val uploadsDir = resourceRoot.resolve("uploads").apply{ mkdirs() }
     val allDirs = resourceRoot.listFiles { file -> file.isDirectory }.orEmpty().toList()
-    val providers = allDirs
-        .associate { dir -> dir.name to FileDataProvider(dir, emptyMap()) as DataProvider }
-        .toMutableMap()
 
-    val wrappedProvider = FileDataProvider(allDirs, uploadsDir, emptyMap())
-    providers["all"] = wrappedProvider
+    val perDirViews = allDirs.map { dir ->
+        DataView(FileBrowserSpec(label = dir.name, path = listOf(dir.name)), FileFileTree(dir, emptyMap()))
+    }
+    val combinedView = DataView(
+        FileBrowserSpec(label = "all", path = listOf("all")),
+        FileFileTree(allDirs, uploadsDir, emptyMap())
+    )
 
-    val rootDataProvider = RootDataProvider { providers }
+    val secondLevel = DataView(RootViewSpec("Deeper", listOf("second")), StaticBranchProvider(perDirViews))
+
+    val rootDataProvider = RootFileTree {
+        DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(perDirViews + combinedView + secondLevel))
+    }
     kotlinx.coroutines.runBlocking { rootDataProvider.refreshProviders() }
 
     val apiKey = generateApiKey()

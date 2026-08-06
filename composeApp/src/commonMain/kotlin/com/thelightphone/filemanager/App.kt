@@ -66,8 +66,20 @@ fun AppTheme(content: @Composable () -> Unit) {
 fun App() {
     AppTheme {
         var serverConnected by remember { mutableStateOf(true) }
-        // null = at the root list, non-null = browsing a directory
-        var currentPath by remember { mutableStateOf<String?>(null) }
+
+        // null = at the true top-level root; otherwise, which page we're on. The composable
+        // rendered is dispatched off this spec's sealed type (see the `when` below), not off
+        // nullability alone — RootScreen also handles nested RootViewSpec pages.
+        var currentSpec by remember { mutableStateOf<DataViewSpec?>(null) }
+
+        // Parent of each currentSpec, in navigation order, so Back returns to the immediate
+        // parent rather than always jumping to the true root.
+        var backStack by remember { mutableStateOf<List<DataViewSpec?>>(emptyList()) }
+
+        // Every spec navigated to this session, keyed by its pushed path string, so a browser
+        // back/forward event (which only hands back a path string) can be resolved to a spec
+        // without needing the whole page tree in memory.
+        var visitedSpecs by remember { mutableStateOf<Map<String, DataViewSpec>>(emptyMap()) }
 
         val apiKey = remember { getApiKey() }
 
@@ -88,33 +100,37 @@ fun App() {
             }
         }
 
-        fun navigateTo(path: String, pushState: Boolean = true) {
-            currentPath = path
-            if (pushState) pushBrowserState(path)
+        fun navigateTo(spec: DataViewSpec, pushState: Boolean = true) {
+            backStack = backStack + currentSpec
+            currentSpec = spec
+            visitedSpecs = visitedSpecs + (spec.path.joinToString("/") to spec)
+            if (pushState) pushBrowserState(spec.path.joinToString("/"))
         }
 
         fun navigateToRoot(pushState: Boolean = true) {
-            currentPath = null
+            backStack = emptyList()
+            currentSpec = null
             if (pushState) pushBrowserState(null)
         }
 
         fun navigateBack() {
-            val path = currentPath ?: return
-            val parent = path.substringBeforeLast('/', "")
-            if (parent.isEmpty()) {
-                navigateToRoot()
-            } else {
-                navigateTo(parent)
-            }
+            val previous = backStack.lastOrNull()
+            backStack = backStack.dropLast(1)
+            currentSpec = previous
+            pushBrowserState(previous?.path?.joinToString("/"))
         }
 
-        // Handle browser back/forward
+        // Handle browser back/forward. A path string resolves against specs visited this
+        // session; anything unresolvable (e.g. a stale/foreign history entry) falls back to root
+        // rather than getting stuck.
         LaunchedEffect(Unit) {
-            onBrowserBack { path ->
-                if (path == null) {
-                    navigateToRoot(pushState = false)
+            onBrowserBack { pathString ->
+                val target = pathString?.let { visitedSpecs[it] }
+                if (target != null) {
+                    currentSpec = target
                 } else {
-                    navigateTo(path, pushState = false)
+                    currentSpec = null
+                    backStack = emptyList()
                 }
             }
         }
@@ -164,19 +180,25 @@ fun App() {
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            if (currentPath == null) {
-                RootScreen(
+            // Typed as an expression (rather than a statement) so the `when` is exhaustiveness-
+            // checked by the compiler: adding a new DataViewSpec subtype, or giving Dropbox or
+            // Configurator their own screen, forces every call site here to be revisited.
+            return@Column when (val spec = currentSpec) {
+                null -> RootScreen(
                     client = client,
-                    serverConnected = serverConnected,
-                    onPathClick = { navigateTo(it) }
-                )
-            } else {
-                EntriesScreen(
-                    client = client,
-                    currentPath = currentPath!!,
-                    onNavigateTo = { navigateTo(it) },
+                    spec = null,
+                    onPageClick = { navigateTo(it) },
                     onBack = { navigateBack() }
                 )
+                is RootViewSpec -> RootScreen(
+                    client = client,
+                    spec = spec,
+                    onPageClick = { navigateTo(it) },
+                    onBack = { navigateBack() }
+                )
+                is FileBrowserSpec -> EntriesScreen(client = client, spec = spec, onBack = { navigateBack() })
+                is DropboxSpec -> EntriesScreen(client = client, spec = spec, onBack = { navigateBack() })
+                is ConfiguratorSpec -> EntriesScreen(client = client, spec = spec, onBack = { navigateBack() })
             }
         }
         }

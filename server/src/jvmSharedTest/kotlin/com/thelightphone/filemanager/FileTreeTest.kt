@@ -6,19 +6,22 @@ import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.*
 
-class DataProviderTest {
+class FileTreeTest {
 
     private lateinit var tempDir: File
 
-    private fun createProvider(): FileDataProvider =
-        FileDataProvider(root = tempDir, defaultThumbnails = emptyMap())
+    private fun createProvider(): FileFileTree =
+        FileFileTree(root = tempDir, defaultThumbnails = emptyMap())
 
-    private fun createProvider(readRoots: List<File>, writeRoot: File): FileDataProvider =
-        FileDataProvider(readRoots = readRoots, writeRoot = writeRoot, defaultThumbnails = emptyMap())
+    private fun createProvider(readRoots: List<File>, writeRoot: File): FileFileTree =
+        FileFileTree(readRoots = readRoots, writeRoot = writeRoot, defaultThumbnails = emptyMap())
 
-    private fun createRootProvider(vararg named: Pair<String, FileDataProvider>): RootDataProvider {
-        val map = named.toMap()
-        return RootDataProvider { map }.also { runBlocking { it.refreshProviders() } }
+    private fun createRootProvider(vararg named: Pair<String, FileFileTree>): RootFileTree {
+        val children = named.map { (name, provider) ->
+            DataView(FileBrowserSpec(label = name, path = listOf(name)), provider)
+        }
+        return RootFileTree { DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(children)) }
+            .also { runBlocking { it.refreshProviders() } }
     }
 
     @BeforeTest
@@ -178,8 +181,8 @@ class DataProviderTest {
         File(dir2, "readme.md").writeText("docs")
 
         val root = createRootProvider(
-            "photos" to FileDataProvider(dir1, emptyMap()),
-            "docs" to FileDataProvider(dir2, emptyMap())
+            "photos" to FileFileTree(dir1, emptyMap()),
+            "docs" to FileFileTree(dir2, emptyMap())
         )
 
         val photosResult = root.getDirectoryForPath(Path.of("photos/."), PageRequest())
@@ -192,11 +195,49 @@ class DataProviderTest {
     }
 
     @Test
+    fun `root provider routes through a nested RootView`() = runBlocking {
+        val dir = File(tempDir, "photos").apply { mkdir() }
+        File(dir, "a.jpg").writeText("photo")
+
+        val leafView = DataView(FileBrowserSpec("photos", listOf("photos")), FileFileTree(dir, emptyMap()))
+        val nestedRoot = DataView(RootViewSpec("Deeper", listOf("second")), StaticBranchProvider(listOf(leafView)))
+        val root = RootFileTree {
+            DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(listOf(nestedRoot)))
+        }.also { it.refreshProviders() }
+
+        val topChildren = root.getChildrenAt(Path.of(".")).getOrThrow()
+        val nestedSpec = topChildren.single() as RootViewSpec
+        assertEquals(listOf("second"), nestedSpec.path)
+
+        val nestedChildren = root.getChildrenAt(Path.of("second")).getOrThrow()
+        val nestedPhotosPath = nestedChildren.single().path
+        assertEquals(listOf("second", "photos"), nestedPhotosPath)
+
+        val result = root.getDirectoryForPath(Path.of(nestedPhotosPath.joinToString("/")), PageRequest())
+        assertTrue(result.isSuccess)
+        assertEquals(1, result.getOrThrow().pagination.totalItems)
+        assertEquals("a.jpg", result.getOrThrow().data[0].title)
+    }
+
+    @Test
+    fun `root provider fails for a path pointing at a RootView itself`() = runBlocking {
+        val nestedRoot = DataView(RootViewSpec("Deeper", listOf("second")), StaticBranchProvider(emptyList()))
+        val root = RootFileTree {
+            DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(listOf(nestedRoot)))
+        }.also { it.refreshProviders() }
+
+        val result = root.getDirectoryForPath(Path.of("second"), PageRequest())
+        assertTrue(result.isFailure)
+        assertIs<NoSuchElementException>(result.exceptionOrNull())
+        Unit
+    }
+
+    @Test
     fun `root provider getBytes routes correctly`() = runBlocking {
         val dir = File(tempDir, "files").apply { mkdir() }
         File(dir, "test.txt").writeText("content here")
 
-        val root = createRootProvider("files" to FileDataProvider(dir, emptyMap()))
+        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
 
         val result = root.getBytes(Path.of("files/test.txt"))
         assertEquals("content here", result.getOrThrow().bufferedReader().readText())
@@ -216,12 +257,12 @@ class DataProviderTest {
     fun `root provider lists roots`() = runBlocking {
         val dir = File(tempDir, "a").apply { mkdir() }
         val root = createRootProvider(
-            "alpha" to FileDataProvider(dir, emptyMap()),
-            "beta" to FileDataProvider(dir, emptyMap())
+            "alpha" to FileFileTree(dir, emptyMap()),
+            "beta" to FileFileTree(dir, emptyMap())
         )
 
-        val roots = root.getRoot()
-        assertEquals(setOf("alpha", "beta"), roots.paths.toSet())
+        val roots = root.getChildrenAt(Path.of(".")).getOrThrow()
+        assertEquals(setOf("alpha", "beta"), roots.map { it.label }.toSet())
     }
 
     @Test
@@ -229,8 +270,10 @@ class DataProviderTest {
         val dir = File(tempDir, "dynamic").apply { mkdir() }
         File(dir, "file1.txt").writeText("v1")
 
-        var providerMap = mapOf("src" to FileDataProvider(dir, emptyMap()) as DataProvider)
-        val root = RootDataProvider { providerMap }
+        var children = listOf(
+            DataView(FileBrowserSpec("src", listOf("src")), FileFileTree(dir, emptyMap()))
+        )
+        val root = RootFileTree { DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(children)) }
         root.refreshProviders()
 
         println(root.getDirectoryForPath(Path.of("src/."), PageRequest()))
@@ -239,7 +282,7 @@ class DataProviderTest {
         // Simulate adding a new provider
         val dir2 = File(tempDir, "extra").apply { mkdir() }
         File(dir2, "new.txt").writeText("new")
-        providerMap = providerMap + ("extra" to FileDataProvider(dir2, emptyMap()))
+        children = children + DataView(FileBrowserSpec("extra", listOf("extra")), FileFileTree(dir2, emptyMap()))
 
         // Without invalidation, new root is unknown
         assertTrue(root.getDirectoryForPath(Path.of("extra/."), PageRequest()).isFailure)
@@ -397,7 +440,7 @@ class DataProviderTest {
         val dir = File(tempDir, "files").apply { mkdir() }
         File(dir, "existing.txt").writeText("data")
 
-        val root = createRootProvider("files" to FileDataProvider(dir, emptyMap()))
+        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
 
         assertIs<WriteCheck.Safe>(root.checkWrite(Path.of("files/newfile.txt")))
         assertIs<WriteCheck.FileExists>(root.checkWrite(Path.of("files/existing.txt")))
@@ -408,7 +451,7 @@ class DataProviderTest {
     @Test
     fun `root provider writeBytes routes correctly`() = runBlocking {
         val dir = File(tempDir, "files").apply { mkdir() }
-        val root = createRootProvider("files" to FileDataProvider(dir, emptyMap()))
+        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
 
         val result = root.writeBytes(Path.of("files/test.txt")) { out ->
             out.write("via root".toByteArray())
@@ -554,7 +597,7 @@ class DataProviderTest {
         val dir = File(tempDir, "files").apply { mkdir() }
         File(dir, "target.txt").writeText("delete me")
 
-        val root = createRootProvider("files" to FileDataProvider(dir, emptyMap()))
+        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
 
         val result = root.delete(Path.of("files/target.txt"))
         assertTrue(result.isSuccess)
@@ -567,7 +610,7 @@ class DataProviderTest {
         val dir = File(tempDir, "files").apply { mkdir() }
         File(dir, "old.txt").writeText("rename me")
 
-        val root = createRootProvider("files" to FileDataProvider(dir, emptyMap()))
+        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
 
         val result = root.rename(Path.of("files/old.txt"), "new.txt")
         assertTrue(result.isSuccess)

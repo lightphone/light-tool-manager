@@ -51,7 +51,7 @@ fun generateApiKey(): String {
 private const val TAG = "FileManagerServer"
 
 fun Application.module(
-    rootDataProvider: RootDataProvider,
+    rootDataProvider: RootFileTree,
     enableLogging: Boolean,
     fileManagerLogger: Logger,
     apiKey: String? = null
@@ -134,8 +134,14 @@ fun Application.module(
             call.respond(HttpStatusCode.OK)
         }
 
-        get("/api/root") {
-            call.respond(HttpStatusCode.OK, rootDataProvider.getRoot())
+        // Returns the immediate children (one level) of the page at this path; empty path
+        // ("." by the same convention as every other route below) means the top-level pages.
+        get("/api/tree/{path...}") {
+            val filePath = call.parameters.getAll("path")?.joinToString("/") ?: "."
+            rootDataProvider.getChildrenAt(Path.of(filePath)).fold(
+                onSuccess = { call.respond(HttpStatusCode.OK, it) },
+                onFailure = { call.respondError(it) }
+            )
         }
 
         // returns DirectoryMeta
@@ -378,7 +384,7 @@ private suspend fun ApplicationCall.respondError(error: Throwable) {
 private suspend fun streamFilesToZip(
     output: ByteWriteChannel,
     paths: List<String>,
-    dataProvider: DataProvider,
+    dataProvider: LeafFileTree,
     fileManagerLogger: Logger
 ) {
     val zipBuffer = ByteArrayOutputStream(32768)

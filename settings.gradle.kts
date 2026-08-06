@@ -28,6 +28,7 @@ dependencyResolutionManagement {
     }
 }
 
+include(":client")
 include(":composeApp")
 include(":server")
 include(":serverrunner")

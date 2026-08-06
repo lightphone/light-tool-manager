@@ -29,14 +29,15 @@ class ApplicationTest {
         val tempDir = File(System.getProperty("java.io.tmpdir"), "apptest-${System.nanoTime()}")
         tempDir.mkdirs()
         try {
-            val provider = FileDataProvider(tempDir, emptyMap())
-            val rootProvider = RootDataProvider { mapOf("files" to provider) }
+            val provider = FileFileTree(tempDir, emptyMap())
+            val view = DataView(FileBrowserSpec("files", listOf("files")), provider)
+            val rootProvider = RootFileTree { DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(listOf(view))) }
             rootProvider.refreshProviders()
 
             application {
                 module(rootProvider, false, logger)
             }
-            val response = client.get("/api/root")
+            val response = client.get("/api/tree")
             assertEquals(HttpStatusCode.OK, response.status)
             assertTrue(response.bodyAsText().contains("files"))
         } finally {

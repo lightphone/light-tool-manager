@@ -11,20 +11,19 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
-//These mirror columns defined in light-sdk:sdk:client:LightFileProvider
-private const val COLUMN_IS_DIRECTORY = "is_directory"
-private const val COLUMN_LAST_MODIFIED = "last_modified"
+// COLUMN_IS_DIRECTORY / COLUMN_LAST_MODIFIED come from shared/.../LightFileProviderContract.kt,
+// the same constants the client module's LightFileProvider uses to build its cursors.
 
 // NOT YET TESTED!!
 // Will be used to route requests to third-party tools which use the fileShare
-class ContentResolverDataProvider(
+class ContentResolverFileTree(
     private val contentResolver: ContentResolver,
     private val authority: String,
     readOnly: Boolean = false,
     showHiddenFiles: Boolean = false,
     cacheTtl: Duration = 5.minutes,
     timeNow: () -> Instant = { Clock.System.now() }
-) : CachingDataProvider(readOnly, showHiddenFiles, cacheTtl, timeNow) {
+) : CachingFileTree(readOnly, showHiddenFiles, cacheTtl, timeNow) {
 
     private fun pathToUri(path: Path): Uri {
         val pathStr = path.normalize().toString()

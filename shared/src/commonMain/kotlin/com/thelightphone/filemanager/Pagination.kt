@@ -37,7 +37,7 @@ enum class SortOrder {
 }
 
 enum class SortBy {
-    DATE, SIZE, NAME
+    DATE, SIZE, NAME, KIND
 }
 
 // Extension to validate and create PageRequest from query parameters
