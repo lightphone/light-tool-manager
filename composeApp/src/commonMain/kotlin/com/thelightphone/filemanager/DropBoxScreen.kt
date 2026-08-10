@@ -57,18 +57,18 @@ fun DropBoxScreen(
     var isUploading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    fun onUpload(fileName: String, bytes: ByteArray) {
+    fun onUpload(files: List<Pair<String, ByteArray>>) {
         coroutineScope.launch {
-            uploadFile(fileName, bytes, currentPath, client, onIsUploading = { isUploading = it }) {
-                onAlert(FileManagerAlert("Upload success!"))
-            }
+            // uploadFiles already posts a "<file> was uploaded, N remaining" alert per file, so
+            // there's no separate batch-complete alert here — the last one (0 remaining) is that.
+            uploadFiles(files, currentPath, client, onIsUploading = { isUploading = it }) {}
         }
     }
 
     fun onClickUpload() {
         isUploading = true
         triggerFilePicker(
-            onFileSelected = { fileName, bytes -> onUpload(fileName, bytes) },
+            onFilesSelected = { files -> onUpload(files) },
             onCancelled = { isUploading = false }
         )
     }

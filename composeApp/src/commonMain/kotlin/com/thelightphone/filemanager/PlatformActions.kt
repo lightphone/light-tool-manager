@@ -15,7 +15,8 @@ expect fun pushBrowserState(path: String?)
 expect fun onBrowserBack(handler: (path: String?) -> Unit)
 
 expect fun triggerFilePicker(
-    onFileSelected: (fileName: String, bytes: ByteArray) -> Unit,
+    multiple: Boolean = true,
+    onFilesSelected: (files: List<Pair<String, ByteArray>>) -> Unit,
     onCancelled: () -> Unit = {}
 )
 

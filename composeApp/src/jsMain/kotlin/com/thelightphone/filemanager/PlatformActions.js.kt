@@ -50,47 +50,65 @@ actual fun onBrowserBack(handler: (path: String?) -> Unit) {
 }
 
 actual fun triggerFilePicker(
-    onFileSelected: (fileName: String, bytes: ByteArray) -> Unit,
+    multiple: Boolean,
+    onFilesSelected: (files: List<Pair<String, ByteArray>>) -> Unit,
     onCancelled: () -> Unit
 ) {
     val input = document.createElement("input")
     input.setAttribute("type", "file")
+    if (multiple) input.setAttribute("multiple", "true")
 
-    // Set synchronously the instant `change` fires — i.e. the moment a file is chosen, well
-    // before FileReader finishes reading its contents. The focus-based cancel check below must
-    // gate on this, not on the read having finished: for a large file that read can take longer
-    // than the cancel-detection delay, so gating on "read finished" would misreport an
+    // Set synchronously the instant `change` fires — i.e. the moment files are chosen, well
+    // before any FileReader finishes reading their contents. The focus-based cancel check below
+    // must gate on this, not on the reads having finished: for a large file that read can take
+    // longer than the cancel-detection delay, so gating on "reads finished" would misreport an
     // in-progress large read as a cancellation (and drop the real selection on the floor, since
     // onCancelled would already have fired by the time onload runs).
     var fileWasChosen = false
 
     input.addEventListener("change", { event ->
         val files = event.target.asDynamic().files
-        val file = files[0]
-        if (file == null) {
+        val fileCount = files.length as Int
+        if (fileCount == 0) {
             fileWasChosen = true
             onCancelled()
             return@addEventListener
         }
         fileWasChosen = true
-        val reader = js("new FileReader()")
-        reader.onload = { e: dynamic ->
-            val arrayBuffer = e.target.result as org.khronos.webgl.ArrayBuffer
-            // Kotlin/JS's ByteArray is backed by Int8Array at runtime, so this reinterprets the
-            // raw bytes directly instead of copying element-by-element through a boxed loop —
-            // for a large file (~100MB+), the boxed-loop version blocks the single JS thread for
-            // a long time before the upload even starts, which looks like the upload hanging.
-            val byteArray = org.khronos.webgl.Int8Array(arrayBuffer).unsafeCast<ByteArray>()
-            onFileSelected(file.name as String, byteArray)
+
+        // Files are read in parallel (local disk reads are cheap; it's the upload over the
+        // network that needs throttling, done by the caller) but reported back as a single
+        // ordered list once every read has finished, so callers can decide upload order/pacing
+        // without juggling partial results themselves.
+        val results = arrayOfNulls<Pair<String, ByteArray>>(fileCount)
+        var remaining = fileCount
+        for (i in 0 until fileCount) {
+            val file = files[i]
+            val fileName = file.name as String
+            val reader = js("new FileReader()")
+            reader.onload = { e: dynamic ->
+                val arrayBuffer = e.target.result as org.khronos.webgl.ArrayBuffer
+                // Kotlin/JS's ByteArray is backed by Int8Array at runtime, so this reinterprets
+                // the raw bytes directly instead of copying element-by-element through a boxed
+                // loop — for a large file (~100MB+), the boxed-loop version blocks the single JS
+                // thread for a long time before the upload even starts, which looks like the
+                // upload hanging.
+                val byteArray = org.khronos.webgl.Int8Array(arrayBuffer).unsafeCast<ByteArray>()
+                results[i] = fileName to byteArray
+                remaining--
+                if (remaining == 0) {
+                    onFilesSelected(results.filterNotNull())
+                }
+            }
+            reader.readAsArrayBuffer(file)
         }
-        reader.readAsArrayBuffer(file)
     })
 
     // <input type="file"> has no universally-supported "cancelled" event, so cancellation is
     // detected by the window regaining focus (the native picker is modal) without `change` ever
     // having fired. The short delay only needs to cover dialog-close-to-change-event latency
-    // (independent of file size), since `fileWasChosen` — not the read completing — is what gates
-    // whether this actually reports a cancel.
+    // (independent of file size), since `fileWasChosen` — not the reads completing — is what
+    // gates whether this actually reports a cancel.
     lateinit var onWindowFocus: (org.w3c.dom.events.Event) -> Unit
     onWindowFocus = {
         window.removeEventListener("focus", onWindowFocus)

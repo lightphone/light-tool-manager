@@ -79,11 +79,16 @@ import kotlin.time.Instant
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.datetime.format
 import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.vectorResource
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 // Handles FileBrowserSpec/DropboxSpec/ConfiguratorSpec pages (any DataViewSpec that isn't a
 // RootViewSpec) until those get their own dedicated screens. Owns subfolder drill-down
@@ -189,11 +194,10 @@ fun EntriesScreen(
 
     BackClickInterceptor { navigateBack() }
 
-    fun onUpload(fileName: String, bytes: ByteArray) {
+    fun onUpload(files: List<Pair<String, ByteArray>>) {
         coroutineScope.launch {
-            uploadFile(
-                fileName,
-                bytes,
+            uploadFiles(
+                files,
                 currentPath,
                 client,
                 onIsUploading = { isUploading = it },
@@ -247,7 +251,7 @@ private fun EntriesScreenContent(
     onEntryClick: (Entry) -> Unit,
     onClearSelection: () -> Unit,
     onDownloadSelected: () -> Unit,
-    onUpload: (fileName: String, bytes: ByteArray) -> Unit
+    onUpload: (files: List<Pair<String, ByteArray>>) -> Unit
 ) {
     val gridState = rememberLazyGridState()
     val focusRequester = remember { FocusRequester() }
@@ -357,12 +361,7 @@ private fun EntriesScreenContent(
                                     TextButton(
                                         text = "upload",
                                         onClick = {
-                                            triggerFilePicker(onFileSelected = { name, bytes ->
-                                                onUpload(
-                                                    name,
-                                                    bytes
-                                                )
-                                            })
+                                            triggerFilePicker(onFilesSelected = { files -> onUpload(files) })
                                         },
                                         enabled = !isUploading
                                     )
@@ -378,34 +377,110 @@ private fun EntriesScreenContent(
     }
 }
 
-suspend fun uploadFile(
-    fileName: String,
-    bytes: ByteArray,
+private val AlertBatchWindow = 1.seconds
+
+// Batches upload results that land within a short window into one alert instead of a flood of
+// one-per-file toasts (e.g. a fast batch of small files landing well under a second apart). The
+// window is anchored to the first result added to an empty batch rather than reset by each new
+// arrival, so a steady trickle of slow uploads can't delay every alert indefinitely. `flushNow`
+// lets the caller collapse the wait once it knows no more results are coming (the whole upload
+// finished) instead of always sitting out the rest of the window for nothing.
+private class AlertBatch(
+    private val scope: CoroutineScope,
+    private val emit: (names: List<String>, remaining: Int) -> Unit
+) {
+    private val names = mutableListOf<String>()
+    private var remaining = 0
+    private var flushJob: Job? = null
+
+    fun add(name: String, remainingCount: Int) {
+        names.add(name)
+        remaining = remainingCount
+        if (flushJob == null) {
+            flushJob = scope.launch {
+                delay(AlertBatchWindow)
+                flushNow()
+            }
+        }
+    }
+
+    fun flushNow() {
+        flushJob?.cancel()
+        flushJob = null
+        if (names.isEmpty()) return
+        val batchedNames = names.toList()
+        val batchedRemaining = remaining
+        names.clear()
+        emit(batchedNames, batchedRemaining)
+    }
+}
+
+// "a.jpg" (+ verb) for a lone result, "a.jpg and 2 others" (+ verb) for a batch.
+private fun batchedMessage(names: List<String>, verb: String): String {
+    val others = names.size - 1
+    val lead = if (others <= 0) {
+        names.first()
+    } else {
+        "${names.first()} and $others other${if (others == 1) "" else "s"}"
+    }
+    return "$lead $verb"
+}
+
+suspend fun uploadFiles(
+    files: List<Pair<String, ByteArray>>,
     currentPath: String,
     client: HttpClient,
     onAlert: (FileManagerAlert) -> Unit = ::pushGlobalAlert,
     onIsUploading: (Boolean) -> Unit,
     onSuccess: () -> Unit,
 ) {
+    if (files.isEmpty()) return
     onIsUploading(true)
-    runCatching {
-        val status = uploadOctetStream(
-            client,
-            "${getBaseUrl()}/api/upload/$currentPath/$fileName",
-            bytes,
-            5.minutes.inWholeMilliseconds,
-        )
-        if (status.isSuccess()) {
-            client.post("${getBaseUrl()}/api/notify/$currentPath")
-            onSuccess()
-        } else {
-            onAlert(FileManagerAlert("Failed to upload file: $status"))
+    var remaining = files.size
+
+    coroutineScope {
+        val successes = AlertBatch(this) { names, remainingAtFlush ->
+            val message = batchedMessage(names, "uploaded successfully")
+            onAlert(FileManagerAlert("$message, $remainingAtFlush file(s) remaining"))
         }
-    }.onFailure { e ->
-        // Without this, a timeout/dropped connection/etc. during the upload just vanishes —
-        // isUploading flips back to false with no indication anything went wrong.
-        onAlert(FileManagerAlert("Failed to upload file: ${e.message}"))
+        val failures = AlertBatch(this) { names, remainingAtFlush ->
+            val message = batchedMessage(names, "failed to upload")
+            onAlert(FileManagerAlert("$message, $remainingAtFlush file(s) remaining"))
+        }
+
+        // upload sequentially for now - not sure parallel uploads are going to improve throughput
+        // on light devices, worth testing though
+        for ((fileName, bytes) in files) {
+            runCatching {
+                val status = uploadOctetStream(
+                    client,
+                    "${getBaseUrl()}/api/upload/$currentPath/$fileName",
+                    bytes,
+                    5.minutes.inWholeMilliseconds,
+                )
+                if (status.isSuccess()) {
+                    client.post("${getBaseUrl()}/api/notify/$currentPath")
+                }
+                status
+            }.onSuccess { status ->
+                remaining--
+                if (status.isSuccess()) {
+                    successes.add(fileName, remaining)
+                } else {
+                    failures.add(fileName, remaining)
+                }
+            }.onFailure {
+                remaining--
+                // catches failures not returned from server
+                failures.add(fileName, remaining)
+            }
+        }
+
+        successes.flushNow()
+        failures.flushNow()
     }
+
+    onSuccess()
     onIsUploading(false)
 }
 
@@ -422,12 +497,7 @@ fun EntryList(
     val gridItemSize = 180.dp
     val gridSpacing = 8.dp
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        // Mirrors GridCells.Adaptive's own column-count formula so this always matches what the
-        // grid actually renders this frame. The previous approach derived column count from
-        // gridState.layoutInfo.visibleItemsInfo, which lags a frame behind the real layout: when
-        // resizing across a column-count boundary, the header's span could end up wider than the
-        // grid's real column count for that frame. A span that never fits any line permanently
-        // stalls layout of every item after it, so the whole grid renders blank.
+        // This is how GridCells.Adaptive maintains column count under the hood
         val columnCount = remember(maxWidth) {
             (((maxWidth + gridSpacing) / (gridItemSize + gridSpacing)).toInt()).coerceAtLeast(1)
         }
@@ -680,7 +750,7 @@ fun EntriesScreenContentPreview() {
             onEntryClick = {},
             onClearSelection = {},
             onDownloadSelected = {},
-            onUpload = { _, _ -> }
+            onUpload = {}
         )
     }
 }
@@ -706,7 +776,7 @@ fun EntriesScreenContentLoadingPreview() {
             onEntryClick = {},
             onClearSelection = {},
             onDownloadSelected = {},
-            onUpload = { _, _ -> }
+            onUpload = {}
         )
     }
 }

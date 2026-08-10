@@ -20,7 +20,8 @@ actual fun pushBrowserState(path: String?) {}
 
 actual fun onBrowserBack(handler: (path: String?) -> Unit) {}
 actual fun triggerFilePicker(
-    onFileSelected: (fileName: String, bytes: ByteArray) -> Unit,
+    multiple: Boolean,
+    onFilesSelected: (files: List<Pair<String, ByteArray>>) -> Unit,
     onCancelled: () -> Unit
 ) {}
 actual fun getApiKey(): String? = null
