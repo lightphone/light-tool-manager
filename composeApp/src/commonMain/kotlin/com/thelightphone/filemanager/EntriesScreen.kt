@@ -44,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.input.key.Key
@@ -108,6 +109,7 @@ fun EntriesScreen(
     var currentPage by remember(currentPath) { mutableStateOf(1) }
     var hasMorePages by remember(currentPath) { mutableStateOf(true) }
     var selectedPaths by remember(currentPath) { mutableStateOf<Set<String>>(emptySet()) }
+    var lastSelectedIndex by remember(currentPath) { mutableStateOf<Int?>(null) }
     var isReadOnly by remember(currentPath) { mutableStateOf(true) }
     var isUploading by remember(currentPath) { mutableStateOf(false) }
     val pageSize = 20
@@ -148,12 +150,28 @@ fun EntriesScreen(
         }
     }
 
-    fun toggleSelection(path: String) {
-        selectedPaths = if (selectedPaths.contains(path)) {
-            selectedPaths - path
+    fun toggleSelection(path: String, index: Int, accumulate: Boolean = false) {
+        val lastIndexSnapshot = lastSelectedIndex
+        if (accumulate && lastIndexSnapshot != null) {
+            val range = if (index < lastIndexSnapshot) {
+                index..lastIndexSnapshot
+            } else {
+                lastIndexSnapshot..index
+            }
+            val selections = range.mapNotNull { allEntries.getOrNull(it)?.path }
+            selectedPaths += selections
         } else {
-            selectedPaths + path
+            selectedPaths = if (selectedPaths.contains(path)) {
+                selectedPaths - path
+            } else {
+                selectedPaths + path
+            }
         }
+        // Every click — shift or not — becomes the new anchor a later shift-click extends from.
+        // Previously this only happened inside the accumulate branch, which meant the very first
+        // shift-click after opening a folder always had a null anchor to work with (no prior
+        // click had ever set one) and fell through to a plain toggle instead of range-selecting.
+        lastSelectedIndex = index
     }
 
     fun downloadSelected() {
@@ -219,13 +237,13 @@ fun EntriesScreen(
         isUploading = isUploading,
         onRetry = { loadEntries(it, 1) },
         onLoadMore = { loadEntries(sort, currentPage + 1, append = true) },
-        onEntryClick = { entry ->
+        onEntryClick = { entry, index, accumulate ->
             if (entry.type == EntryType.Directory) {
                 // entry.path is already the full absolute path from the server, not relative
                 // to currentPath, so it can be used directly as the new location.
                 currentPath = entry.path
             } else {
-                toggleSelection(entry.path)
+                toggleSelection(entry.path, index, accumulate)
             }
         },
         onClearSelection = { selectedPaths = emptySet() },
@@ -248,7 +266,7 @@ private fun EntriesScreenContent(
     sort: Sort,
     onRetry: (Sort) -> Unit,
     onLoadMore: () -> Unit,
-    onEntryClick: (Entry) -> Unit,
+    onEntryClick: (Entry, Int, Boolean) -> Unit,
     onClearSelection: () -> Unit,
     onDownloadSelected: () -> Unit,
     onUpload: (files: List<Pair<String, ByteArray>>) -> Unit
@@ -256,6 +274,11 @@ private fun EntriesScreenContent(
     val gridState = rememberLazyGridState()
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    // Tracked via key down/up rather than read off the click event itself, matching the existing
+    // Escape-key handling below. Reset on focus loss so alt-tabbing away mid-hold can't leave
+    // this stuck true forever (the matching KeyUp would never arrive to clear it otherwise).
+    var isShiftPressed by remember { mutableStateOf(false) }
 
     // Infinite scroll. isLoadingMore/hasMorePages/isLoading/onLoadMore are read through
     // rememberUpdatedState rather than captured directly: this effect is keyed only on
@@ -287,12 +310,18 @@ private fun EntriesScreenContent(
             .widthIn(max = InnerColumnWidth)
             .focusRequester(focusRequester)
             .focusable()
+            .onFocusChanged { if (!it.hasFocus) isShiftPressed = false }
             .onPreviewKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-                    onClearSelection()
-                    true
-                } else {
-                    false
+                when {
+                    event.key == Key.ShiftLeft || event.key == Key.ShiftRight -> {
+                        isShiftPressed = event.type == KeyEventType.KeyDown
+                        false
+                    }
+                    event.type == KeyEventType.KeyDown && event.key == Key.Escape -> {
+                        onClearSelection()
+                        true
+                    }
+                    else -> false
                 }
             }
     ) {
@@ -313,7 +342,7 @@ private fun EntriesScreenContent(
                     gridState = gridState,
                     isLoadingMore = isLoadingMore,
                     selectedPaths = selectedPaths,
-                    onEntryClick = onEntryClick,
+                    onEntryClick = { entry, index -> onEntryClick(entry, index, isShiftPressed) },
                     scrollingHeader = { SpecHeaderText(spec) }
                 ) {
                     Column(
@@ -490,7 +519,7 @@ fun EntryList(
     gridState: LazyGridState,
     isLoadingMore: Boolean,
     selectedPaths: Set<String>,
-    onEntryClick: (Entry) -> Unit,
+    onEntryClick: (Entry, Int) -> Unit,
     scrollingHeader: @Composable () -> Unit,
     header: @Composable () -> Unit
 ) {
@@ -527,7 +556,7 @@ fun EntryList(
                     isSelected = selectedPaths.contains(item.path),
                     variant = variant(idx),
                     gridItemSize = gridItemSize,
-                    onClick = onEntryClick
+                    onClick = { onEntryClick(item, idx) }
                 )
             }
 
@@ -747,7 +776,7 @@ fun EntriesScreenContentPreview() {
             isUploading = false,
             onRetry = { sort = it },
             onLoadMore = {},
-            onEntryClick = {},
+            onEntryClick = { _, _, _ -> },
             onClearSelection = {},
             onDownloadSelected = {},
             onUpload = {}
@@ -773,7 +802,7 @@ fun EntriesScreenContentLoadingPreview() {
             isUploading = false,
             onRetry = {},
             onLoadMore = {},
-            onEntryClick = {},
+            onEntryClick = { _, _, _ -> },
             onClearSelection = {},
             onDownloadSelected = {},
             onUpload = {}
