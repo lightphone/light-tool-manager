@@ -22,12 +22,12 @@ fun main() {
                 path = listOf(dir.name),
                 headerText = "This directory is called: ${dir.name}\n\nFeel free to take a look around!"
             ),
-            FileFileTree(dir, emptyMap())
+            DesktopFileTree(dir)
         )
     }
     val combinedView = DataView(
         FileBrowserSpec(label = "All Files", path = listOf("all"), headerText = "These are all of the files!"),
-        FileFileTree(allDirs, uploadsDir, emptyMap())
+        DesktopFileTree(allDirs, uploadsDir)
     )
 
     val uploadsDropBox = DataView(
@@ -39,7 +39,7 @@ fun main() {
                     "When you upload here, your files will show in the Uploads directory!",
             buttonText = "Click Here to Upload"
         ),
-        FileFileTree(uploadsDir, emptyMap())
+        DesktopFileTree(uploadsDir)
     )
 
     val rootDataProvider = RootFileTree {

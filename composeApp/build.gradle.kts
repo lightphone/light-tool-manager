@@ -61,6 +61,7 @@ kotlin {
             implementation(libs.ktor.serializationKotlinxJson)
             implementation(libs.coil.compose)
             implementation(libs.coil.networkKtor)
+            implementation(libs.kotlinx.datetime)
             implementation(projects.shared)
         }
 

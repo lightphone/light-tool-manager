@@ -578,14 +578,12 @@ open class FileFileTree(
 
     override suspend fun getThumbnailBytes(filePath: Path, type: EntryType): Result<InputStream> {
         return when (type) {
-            EntryType.Image -> getImageThumbnail(filePath) ?: getBytes(filePath)
-            EntryType.Video -> getVideoThumbnail(filePath) ?: type.default
-            EntryType.Directory,
-            EntryType.GenericFile,
-            EntryType.Audio,
-            EntryType.Text -> {
-                type.default
-            }
+            Image -> getImageThumbnail(filePath) ?: getBytes(filePath)
+            Video -> getVideoThumbnail(filePath) ?: type.default
+            Directory,
+            GenericFile,
+            Audio,
+            Text -> { type.default }
         }
     }
 

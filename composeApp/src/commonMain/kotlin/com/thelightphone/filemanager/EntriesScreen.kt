@@ -1,11 +1,13 @@
 package com.thelightphone.filemanager
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
@@ -49,25 +52,37 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.thelightphone.filemanager.composeapp.generated.resources.Res
 import com.thelightphone.filemanager.composeapp.generated.resources.ic_reverse_order_white
 import com.thelightphone.filemanager.composeapp.generated.resources.ic_trash
+import com.thelightphone.filemanager.composeapp.generated.resources.ic_text_file
+import com.thelightphone.filemanager.composeapp.generated.resources.ic_audio_waveform
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.format.MonthNames
+import kotlinx.datetime.format.Padding
+import kotlinx.datetime.toLocalDateTime
+import kotlin.time.Instant
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.launch
+import kotlinx.datetime.format
 import org.jetbrains.compose.resources.painterResource
+import org.jetbrains.compose.resources.vectorResource
 import kotlin.time.Duration.Companion.minutes
 
 // Handles FileBrowserSpec/DropboxSpec/ConfiguratorSpec pages (any DataViewSpec that isn't a
@@ -468,6 +483,80 @@ fun EntryList(
     }
 }
 
+private val LastModifiedDateFormat = LocalDate.Format {
+    monthName(MonthNames.ENGLISH_ABBREVIATED)
+    chars(". ")
+    day(Padding.NONE)
+    chars(", ")
+    year()
+}
+
+// entry.lastModified is epoch millis in UTC; rendered in the viewer's local calendar date.
+private fun formatLastModified(epochMillis: Long): String =
+    Instant.fromEpochMilliseconds(epochMillis)
+        .toLocalDateTime(TimeZone.currentSystemDefault())
+        .date
+        .format(LastModifiedDateFormat)
+
+@Composable
+fun BoxScope.VideoListItem(entry: Entry) {
+    AsyncImage(
+        model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
+        contentDescription = entry.title,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop
+    )
+    entry.meta?.get(MetaKeys.DURATION)?.let {
+        Text(
+            it,
+            color = MaterialTheme.colorScheme.background,
+            fontSize = 20.sp,
+            modifier = Modifier.padding(16.dp).align(Alignment.BottomCenter)
+        )
+    }
+}
+
+@Composable
+fun BoxScope.FileListItem(entry: Entry) {
+    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+        val (resource, contentDescription) = when (entry.type) {
+            EntryType.Audio -> Res.drawable.ic_audio_waveform to "Audio waveform icon"
+            else -> Res.drawable.ic_text_file to "Generic file icon"
+        }
+        Spacer(Modifier.height(12.dp))
+        Image(
+            vectorResource(resource),
+            contentDescription = contentDescription,
+            Modifier.fillMaxSize(0.65f)
+        )
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f)
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+        ) {
+            listOf(entry.title, formatLastModified(entry.lastModified)).forEach {
+                Text(
+                    it,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.background,
+                    maxLines = 1,
+                    lineHeight = 20.sp,
+                    overflow = TextOverflow.MiddleEllipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ImageListItem(entry: Entry) {
+    AsyncImage(
+        model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
+        contentDescription = entry.title,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop
+    )
+}
+
 @Composable
 fun EntryListItem(
     entry: Entry,
@@ -481,14 +570,13 @@ fun EntryListItem(
     Box(Modifier.aspectRatio(1f).background(bgColor).clickable {
         onClick(entry)
     }) {
-        if (entry.type == EntryType.Image || entry.type == EntryType.Video) {
-            AsyncImage(
-                model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
-                contentDescription = entry.title,
-                placeholder = ColorPainter(bgColor),
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
+        when (entry.type) {
+            EntryType.Directory -> { /* Directories not supported currently */
+            }
+
+            EntryType.Image -> ImageListItem(entry)
+            EntryType.Video -> VideoListItem(entry)
+            EntryType.GenericFile, EntryType.Text, EntryType.Audio -> FileListItem(entry)
         }
         if (isSelected) {
             Box(Modifier.fillMaxSize().border(5.dp, MaterialTheme.colorScheme.onBackground))
@@ -552,7 +640,15 @@ private val previewEntries = listOf(
     Entry(EntryType.Directory, "vacation", "photos/vacation", 0L, 0L),
     Entry(EntryType.Image, "photo.jpg", "photos/photo.jpg", 0L, 1024L),
     Entry(EntryType.Audio, "song.mp3", "photos/song.mp3", 0L, 4096L),
-    Entry(EntryType.Text, "notes.txt", "photos/notes.txt", 0L, 256L),
+    Entry(EntryType.Text, "notes_and_other_important_things.txt", "photos/notes.txt", 0L, 256L),
+    Entry(
+        EntryType.Video,
+        "Video.mp4",
+        "photos/Video.mp4",
+        0L,
+        4096L,
+        meta = mapOf(MetaKeys.DURATION to "12:34")
+    ),
 )
 
 @Preview(device = Devices.DESKTOP)
