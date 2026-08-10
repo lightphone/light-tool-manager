@@ -1,58 +1,73 @@
 package com.thelightphone.filemanager
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.painter.ColorPainter
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.thelightphone.filemanager.composeapp.generated.resources.Res
+import com.thelightphone.filemanager.composeapp.generated.resources.ic_reverse_order_white
+import com.thelightphone.filemanager.composeapp.generated.resources.ic_trash
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
-import io.ktor.client.plugins.timeout
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import io.ktor.serialization.kotlinx.json.json
-import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.painterResource
 import kotlin.time.Duration.Companion.minutes
 
 // Handles FileBrowserSpec/DropboxSpec/ConfiguratorSpec pages (any DataViewSpec that isn't a
@@ -61,16 +76,15 @@ import kotlin.time.Duration.Companion.minutes
 @Composable
 fun EntriesScreen(
     client: HttpClient,
-    spec: DataViewSpec,
-    onBack: () -> Unit
+    spec: FileBrowserSpec,
+    onAlert: (FileManagerAlert) -> Unit = ::pushGlobalAlert
 ) {
-    val rootPath = remember(spec) { spec.path.joinToString("/") }
+    val rootPath = remember(spec) { spec.asPathString }
     var currentPath by remember(spec) { mutableStateOf(rootPath) }
-
     var allEntries by remember(currentPath) { mutableStateOf<List<Entry>>(emptyList()) }
     var isLoading by remember(currentPath) { mutableStateOf(true) }
     var isLoadingMore by remember(currentPath) { mutableStateOf(false) }
-    var error by remember(currentPath) { mutableStateOf<String?>(null) }
+    var sort by remember(currentPath) { mutableStateOf(Sort()) }
     var currentPage by remember(currentPath) { mutableStateOf(1) }
     var hasMorePages by remember(currentPath) { mutableStateOf(true) }
     var selectedPaths by remember(currentPath) { mutableStateOf<Set<String>>(emptySet()) }
@@ -80,13 +94,13 @@ fun EntriesScreen(
 
     val coroutineScope = rememberCoroutineScope()
 
-    fun loadEntries(page: Int, append: Boolean = false) {
+    fun loadEntries(newSort: Sort, page: Int, append: Boolean = false) {
+        sort = newSort
         coroutineScope.launch {
             if (append) {
                 isLoadingMore = true
             } else {
                 isLoading = true
-                error = null
             }
 
             try {
@@ -94,8 +108,8 @@ fun EntriesScreen(
                     client.get("${getBaseUrl()}/api/files/$currentPath") {
                         parameter("page", page)
                         parameter("size", pageSize)
-                        parameter("sortBy", "NAME")
-                        parameter("sortOrder", "ASC")
+                        parameter("sortBy", sort.sortBy)
+                        parameter("sortOrder", sort.sortOrder)
                     }.body()
 
                 allEntries = if (append) {
@@ -107,7 +121,7 @@ fun EntriesScreen(
                 currentPage = page
                 hasMorePages = response.pagination.hasNext
             } catch (e: Throwable) {
-                error = "Failed to load: ${e.message}"
+                onAlert(FileManagerAlert("Failed to load: ${e.message}"))
             }
             isLoading = false
             isLoadingMore = false
@@ -140,56 +154,52 @@ fun EntriesScreen(
         }
     }
 
-    fun uploadFile(fileName: String, bytes: ByteArray) {
-        coroutineScope.launch {
-            isUploading = true
-            runCatching {
-                val response = client.post("${getBaseUrl()}/api/upload/$currentPath/$fileName") {
-                    contentType(ContentType.Application.OctetStream)
-                    setBody(ByteReadChannel(bytes))
-                    timeout {
-                        requestTimeoutMillis = 5.minutes.inWholeMilliseconds
-                    }
-                }
-                if (response.status.isSuccess()) {
-                    client.post("${getBaseUrl()}/api/notify/$currentPath")
-                    loadEntries(1)
-                }
-            }
-            isUploading = false
-        }
-    }
-
     // Initial load + fetch meta
     LaunchedEffect(currentPath) {
-        loadEntries(1)
+        loadEntries(sort, 1)
         isReadOnly = runCatching {
             val meta: DirectoryMeta = client.get("${getBaseUrl()}/api/meta/$currentPath").body()
             meta.readOnly
         }.getOrElse { true }
     }
 
-    fun navigateBack() {
-        if (currentPath == rootPath) {
-            onBack()
+    fun navigateBack(): Boolean {
+        return if (currentPath == rootPath) {
+            false
         } else {
             currentPath = currentPath.substringBeforeLast("/")
+            true
+        }
+    }
+
+    BackClickInterceptor { navigateBack() }
+
+    fun onUpload(fileName: String, bytes: ByteArray) {
+        coroutineScope.launch {
+            uploadFile(
+                fileName,
+                bytes,
+                currentPath,
+                client,
+                onIsUploading = { isUploading = it },
+                onSuccess = { loadEntries(sort, 1) }
+            )
         }
     }
 
     EntriesScreenContent(
+        spec = spec,
+        sort = sort,
         currentPath = currentPath,
         entries = allEntries,
         isLoading = isLoading,
         isLoadingMore = isLoadingMore,
-        error = error,
         hasMorePages = hasMorePages,
         selectedPaths = selectedPaths,
         isReadOnly = isReadOnly,
         isUploading = isUploading,
-        onBack = ::navigateBack,
-        onRetry = { loadEntries(currentPage) },
-        onLoadMore = { loadEntries(currentPage + 1, append = true) },
+        onRetry = { loadEntries(it, 1) },
+        onLoadMore = { loadEntries(sort, currentPage + 1, append = true) },
         onEntryClick = { entry ->
             if (entry.type == EntryType.Directory) {
                 // entry.path is already the full absolute path from the server, not relative
@@ -201,25 +211,23 @@ fun EntriesScreen(
         },
         onClearSelection = { selectedPaths = emptySet() },
         onDownloadSelected = ::downloadSelected,
-        onUpload = ::uploadFile
+        onUpload = ::onUpload
     )
 }
 
-// Renders EntriesScreen from plain state and callbacks, with no HttpClient dependency,
-// so it can be driven by fake data in a @Preview.
 @Composable
-fun EntriesScreenContent(
+private fun EntriesScreenContent(
+    spec: FileBrowserSpec,
     currentPath: String,
     entries: List<Entry>,
     isLoading: Boolean,
     isLoadingMore: Boolean,
-    error: String?,
     hasMorePages: Boolean,
     selectedPaths: Set<String>,
     isReadOnly: Boolean,
     isUploading: Boolean,
-    onBack: () -> Unit,
-    onRetry: () -> Unit,
+    sort: Sort,
+    onRetry: (Sort) -> Unit,
     onLoadMore: () -> Unit,
     onEntryClick: (Entry) -> Unit,
     onClearSelection: () -> Unit,
@@ -227,8 +235,19 @@ fun EntriesScreenContent(
     onUpload: (fileName: String, bytes: ByteArray) -> Unit
 ) {
     val gridState = rememberLazyGridState()
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    // Infinite scroll
+    // Infinite scroll. isLoadingMore/hasMorePages/isLoading/onLoadMore are read through
+    // rememberUpdatedState rather than captured directly: this effect is keyed only on
+    // (gridState, currentPath) so its coroutine is launched once per folder and never
+    // restarts, which means a directly-captured plain parameter would stay frozen at
+    // whatever value it held when the coroutine launched (isLoading, e.g., starts out
+    // true) instead of tracking later recompositions.
+    val latestIsLoadingMore by rememberUpdatedState(isLoadingMore)
+    val latestHasMorePages by rememberUpdatedState(hasMorePages)
+    val latestIsLoading by rememberUpdatedState(isLoading)
+    val latestOnLoadMore by rememberUpdatedState(onLoadMore)
     LaunchedEffect(gridState, currentPath) {
         snapshotFlow {
             val layoutInfo = gridState.layoutInfo
@@ -236,60 +255,31 @@ fun EntriesScreenContent(
             val lastVisibleItemIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             lastVisibleItemIndex >= totalItemsNumber - 3
         }.collect { shouldLoadMore ->
-            if (shouldLoadMore && !isLoadingMore && hasMorePages && !isLoading) {
-                onLoadMore()
+            if (shouldLoadMore && !latestIsLoadingMore && latestHasMorePages && !latestIsLoading) {
+                latestOnLoadMore()
             }
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = onBack,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Back")
-            }
-            if (!isReadOnly) {
-                Button(
-                    onClick = { triggerFilePicker { name, bytes -> onUpload(name, bytes) } },
-                    enabled = !isUploading
-                ) {
-                    Text(if (isUploading) "Uploading..." else "Upload")
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxHeight()
+            .widthIn(max = InnerColumnWidth)
+            .focusRequester(focusRequester)
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    onClearSelection()
+                    true
+                } else {
+                    false
                 }
             }
-        }
-
-        // Selection bar
-        if (selectedPaths.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "${selectedPaths.size} selected",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onClearSelection) {
-                        Text("Clear")
-                    }
-                    Button(onClick = onDownloadSelected) {
-                        Text("Download ZIP")
-                    }
-                }
-            }
-        }
-
+    ) {
         when {
             isLoading -> {
+                SpecHeaderText(spec)
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -297,34 +287,111 @@ fun EntriesScreenContent(
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.onBackground)
                 }
             }
-            error != null -> {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Text(
-                        error,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(16.dp),
-                        textAlign = TextAlign.Center
-                    )
-                    Button(onClick = onRetry) {
-                        Text("Retry")
-                    }
-                }
-            }
+
             else -> {
                 EntryList(
                     entries = entries,
                     gridState = gridState,
                     isLoadingMore = isLoadingMore,
-                    hasMorePages = hasMorePages,
                     selectedPaths = selectedPaths,
-                    onEntryClick = onEntryClick
-                )
+                    onEntryClick = onEntryClick,
+                    scrollingHeader = { SpecHeaderText(spec) }
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .widthIn(max = InnerColumnWidth)
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        val optionsSelected = selectedPaths.isNotEmpty()
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.weight(1f)) {
+                                Icon(
+                                    painter = painterResource(Res.drawable.ic_reverse_order_white),
+                                    contentDescription = "Reverse Sort Order",
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clickable {
+                                            val newOrder =
+                                                if (sort.sortOrder == SortOrder.ASC) SortOrder.DESC else SortOrder.ASC
+                                            onRetry(sort.copy(sortOrder = newOrder))
+                                        }
+                                )
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    painter = painterResource(Res.drawable.ic_trash),
+                                    contentDescription = "Delete",
+                                    tint = if (optionsSelected) EnabledColor else DisabledColor,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clickable(enabled = optionsSelected) {
+
+                                        }
+                                )
+                                TextButton(
+                                    text = "download",
+                                    onClick = onDownloadSelected,
+                                    enabled = optionsSelected
+                                )
+                                if (!isReadOnly) {
+                                    TextButton(
+                                        text = "upload",
+                                        onClick = {
+                                            triggerFilePicker(onFileSelected = { name, bytes ->
+                                                onUpload(
+                                                    name,
+                                                    bytes
+                                                )
+                                            })
+                                        },
+                                        enabled = !isUploading
+                                    )
+                                }
+                            }
+
+                        }
+                        Spacer(Modifier.height(30.dp))
+                    }
+                }
             }
         }
     }
+}
+
+suspend fun uploadFile(
+    fileName: String,
+    bytes: ByteArray,
+    currentPath: String,
+    client: HttpClient,
+    onAlert: (FileManagerAlert) -> Unit = ::pushGlobalAlert,
+    onIsUploading: (Boolean) -> Unit,
+    onSuccess: () -> Unit,
+) {
+    onIsUploading(true)
+    runCatching {
+        val status = uploadOctetStream(
+            client,
+            "${getBaseUrl()}/api/upload/$currentPath/$fileName",
+            bytes,
+            5.minutes.inWholeMilliseconds,
+        )
+        if (status.isSuccess()) {
+            client.post("${getBaseUrl()}/api/notify/$currentPath")
+            onSuccess()
+        } else {
+            onAlert(FileManagerAlert("Failed to upload file: $status"))
+        }
+    }.onFailure { e ->
+        // Without this, a timeout/dropped connection/etc. during the upload just vanishes —
+        // isUploading flips back to false with no indication anything went wrong.
+        onAlert(FileManagerAlert("Failed to upload file: ${e.message}"))
+    }
+    onIsUploading(false)
 }
 
 @Composable
@@ -332,57 +399,69 @@ fun EntryList(
     entries: List<Entry>,
     gridState: LazyGridState,
     isLoadingMore: Boolean,
-    hasMorePages: Boolean,
     selectedPaths: Set<String>,
-    onEntryClick: (Entry) -> Unit
+    onEntryClick: (Entry) -> Unit,
+    scrollingHeader: @Composable () -> Unit,
+    header: @Composable () -> Unit
 ) {
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
-        state = gridState,
-        modifier = Modifier.fillMaxSize()
-    ) {
-        items(entries.size) { i ->
-            EntryListItem(
-                entry = entries[i],
-                isSelected = selectedPaths.contains(entries[i].path),
-                onClick = onEntryClick
-            )
+    val gridItemSize = 180.dp
+    val gridSpacing = 8.dp
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        // Mirrors GridCells.Adaptive's own column-count formula so this always matches what the
+        // grid actually renders this frame. The previous approach derived column count from
+        // gridState.layoutInfo.visibleItemsInfo, which lags a frame behind the real layout: when
+        // resizing across a column-count boundary, the header's span could end up wider than the
+        // grid's real column count for that frame. A span that never fits any line permanently
+        // stalls layout of every item after it, so the whole grid renders blank.
+        val columnCount = remember(maxWidth) {
+            (((maxWidth + gridSpacing) / (gridItemSize + gridSpacing)).toInt()).coerceAtLeast(1)
         }
-
-        if (isLoadingMore) {
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                        Text(
-                            "Loading more...",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+        val oddColumns = columnCount.and(1) == 1
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = gridItemSize),
+            horizontalArrangement = Arrangement.spacedBy(gridSpacing),
+            verticalArrangement = Arrangement.spacedBy(gridSpacing),
+            state = gridState,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                scrollingHeader()
+            }
+            stickyHeader { header() }
+            fun variant(idx: Int): Boolean {
+                return if (oddColumns || columnCount == 0) {
+                    idx.and(1) == 1
+                } else {
+                    val col = idx / columnCount
+                    idx.and(1) != col.and(1)
                 }
             }
-        } else if (!hasMorePages && entries.isNotEmpty()) {
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "End of list",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            itemsIndexed(entries) { idx, item ->
+                EntryListItem(
+                    entry = item,
+                    isSelected = selectedPaths.contains(item.path),
+                    variant = variant(idx),
+                    gridItemSize = gridItemSize,
+                    onClick = onEntryClick
+                )
+            }
+
+            if (isLoadingMore) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                            Text("Loading more...")
+                        }
+                    }
                 }
             }
         }
@@ -392,80 +471,82 @@ fun EntryList(
 @Composable
 fun EntryListItem(
     entry: Entry,
+    variant: Boolean,
+    gridItemSize: Dp,
     isSelected: Boolean,
     onClick: (Entry) -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(4.dp)
-            .clickable { onClick(entry) },
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = if (isSelected) 8.dp else 4.dp
-        ),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected)
-                MaterialTheme.colorScheme.primaryContainer
-            else
-                MaterialTheme.colorScheme.surface
-        )
-    ) {
-        Column {
-            if (entry.type == EntryType.Image || entry.type == EntryType.Video) {
-                AsyncImage(
-                    model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
-                    contentDescription = entry.title,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                        .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)),
-                    contentScale = ContentScale.Crop
-                )
-            }
-
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Text(
-                    entry.title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Text(
-                    entry.type.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Preview(device = Devices.DESKTOP)
-@Composable
-fun EntryListPreview() {
-    val gridState = rememberLazyGridState()
-    AppTheme {
-        Box(Modifier.fillMaxSize()) {
-            EntryList(
-                entries = listOf(
-                    Entry(EntryType.Directory, "vacation", "photos/vacation", 0L, 0L),
-                    Entry(EntryType.Image, "photo.jpg", "photos/photo.jpg", 0L, 1024L),
-                    Entry(EntryType.Audio, "song.mp3", "music/song.mp3", 0L, 4096L),
-                    Entry(EntryType.Text, "notes.txt", "docs/notes.txt", 0L, 256L),
-                ),
-                gridState = gridState,
-                isLoadingMore = false,
-                hasMorePages = false,
-                selectedPaths = setOf("photos/photo.jpg"),
-                onEntryClick = {}
+    val bgColor =
+        if (variant) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+    Box(Modifier.aspectRatio(1f).background(bgColor).clickable {
+        onClick(entry)
+    }) {
+        if (entry.type == EntryType.Image || entry.type == EntryType.Video) {
+            AsyncImage(
+                model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
+                contentDescription = entry.title,
+                placeholder = ColorPainter(bgColor),
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
             )
         }
+        if (isSelected) {
+            Box(Modifier.fillMaxSize().border(5.dp, MaterialTheme.colorScheme.onBackground))
+        }
     }
+//    Card(
+//        modifier = Modifier
+//            .fillMaxWidth()
+//            .padding(4.dp)
+//            .clickable { onClick(entry) },
+//        elevation = CardDefaults.cardElevation(
+//            defaultElevation = if (isSelected) 8.dp else 4.dp
+//        ),
+//        colors = CardDefaults.cardColors(
+//            containerColor = if (isSelected)
+//                MaterialTheme.colorScheme.primaryContainer
+//            else
+//                MaterialTheme.colorScheme.surface
+//        )
+//    ) {
+//        Column {
+//            if (entry.type == EntryType.Image || entry.type == EntryType.Video) {
+//                AsyncImage(
+//                    model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
+//                    contentDescription = entry.title,
+//                    modifier = Modifier
+//                        .fillMaxWidth()
+//                        .height(200.dp)
+//                        .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)),
+//                    contentScale = ContentScale.Crop
+//                )
+//            }
+//
+//            Column(
+//                modifier = Modifier.padding(16.dp)
+//            ) {
+//                Text(
+//                    entry.title,
+//                    style = MaterialTheme.typography.headlineSmall,
+//                    fontWeight = FontWeight.Bold
+//                )
+//
+//                Spacer(modifier = Modifier.height(4.dp))
+//
+//                Text(
+//                    entry.type.name,
+//                    style = MaterialTheme.typography.bodyMedium,
+//                    color = MaterialTheme.colorScheme.onSurfaceVariant
+//                )
+//            }
+//        }
+//    }
 }
+
+private data class Sort(
+    val sortBy: SortBy = SortBy.NAME,
+    val sortOrder: SortOrder = SortOrder.ASC
+)
 
 private val previewEntries = listOf(
     Entry(EntryType.Directory, "vacation", "photos/vacation", 0L, 0L),
@@ -477,19 +558,28 @@ private val previewEntries = listOf(
 @Preview(device = Devices.DESKTOP)
 @Composable
 fun EntriesScreenContentPreview() {
+    var sort by remember { mutableStateOf(Sort()) }
+    val entries by derivedStateOf {
+        if (sort.sortOrder == SortOrder.ASC) {
+            previewEntries.sortedBy { it.title }
+        } else {
+            previewEntries.sortedByDescending { it.title }
+        }
+    }
+    val spec = FileBrowserSpec("Files", listOf("files"), "Sample text options.")
     AppTheme {
         EntriesScreenContent(
-            currentPath = "photos",
-            entries = previewEntries,
+            spec = spec,
+            currentPath = spec.asPathString,
+            entries = entries,
+            sort = sort,
             isLoading = false,
             isLoadingMore = false,
-            error = null,
             hasMorePages = true,
             selectedPaths = setOf("photos/photo.jpg"),
             isReadOnly = false,
             isUploading = false,
-            onBack = {},
-            onRetry = {},
+            onRetry = { sort = it },
             onLoadMore = {},
             onEntryClick = {},
             onClearSelection = {},
@@ -502,43 +592,19 @@ fun EntriesScreenContentPreview() {
 @Preview(device = Devices.DESKTOP)
 @Composable
 fun EntriesScreenContentLoadingPreview() {
+    val spec = FileBrowserSpec("Files", listOf("files"), "Sample text options.")
     AppTheme {
         EntriesScreenContent(
-            currentPath = "photos",
+            spec = spec,
+            currentPath = spec.asPathString,
+            sort = Sort(),
             entries = emptyList(),
             isLoading = true,
             isLoadingMore = false,
-            error = null,
             hasMorePages = false,
             selectedPaths = emptySet(),
             isReadOnly = true,
             isUploading = false,
-            onBack = {},
-            onRetry = {},
-            onLoadMore = {},
-            onEntryClick = {},
-            onClearSelection = {},
-            onDownloadSelected = {},
-            onUpload = { _, _ -> }
-        )
-    }
-}
-
-@Preview(device = Devices.DESKTOP)
-@Composable
-fun EntriesScreenContentErrorPreview() {
-    AppTheme {
-        EntriesScreenContent(
-            currentPath = "photos",
-            entries = emptyList(),
-            isLoading = false,
-            isLoadingMore = false,
-            error = "Failed to load: connection refused",
-            hasMorePages = false,
-            selectedPaths = emptySet(),
-            isReadOnly = true,
-            isUploading = false,
-            onBack = {},
             onRetry = {},
             onLoadMore = {},
             onEntryClick = {},

@@ -1,14 +1,11 @@
 package com.thelightphone.filemanager
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -21,10 +18,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
@@ -40,21 +40,22 @@ fun RootScreen(
     client: HttpClient,
     spec: DataViewSpec?,
     onPageClick: (DataViewSpec) -> Unit,
-    onBack: () -> Unit
+    onAlert: (FileManagerAlert) -> Unit = ::pushGlobalAlert,
 ) {
     var pages by remember(spec) { mutableStateOf<List<DataViewSpec>>(emptyList()) }
     var isLoading by remember(spec) { mutableStateOf(true) }
-    var error by remember(spec) { mutableStateOf<String?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
     fun load() {
         coroutineScope.launch {
             isLoading = true
-            error = null
             val path = spec?.path?.joinToString("/") ?: "."
             runCatching { client.get("${getBaseUrl()}/api/tree/$path").body<List<DataViewSpec>>() }
                 .onSuccess { pages = it }
-                .onFailure { error = "Failed to load: ${it.message}" }
+                .onFailure {
+                    val alert = FileManagerAlert("Failed to load: ${it.message}")
+                    onAlert(alert)
+                }
             isLoading = false
         }
     }
@@ -63,12 +64,8 @@ fun RootScreen(
 
     RootScreenContent(
         isLoading = isLoading,
-        error = error,
         pages = pages,
-        onRetry = { load() },
         onPageClick = onPageClick,
-        // No parent to return to at the true top level.
-        onBack = if (spec != null) onBack else null
     )
 }
 
@@ -77,24 +74,10 @@ fun RootScreen(
 @Composable
 fun RootScreenContent(
     isLoading: Boolean,
-    error: String?,
     pages: List<DataViewSpec>,
-    onRetry: () -> Unit,
     onPageClick: (DataViewSpec) -> Unit,
-    onBack: (() -> Unit)? = null
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        if (onBack != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(onClick = onBack, modifier = Modifier.weight(1f)) {
-                    Text("Back")
-                }
-            }
-        }
-
         when {
             isLoading -> {
                 Box(
@@ -104,22 +87,7 @@ fun RootScreenContent(
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.onBackground)
                 }
             }
-            error != null -> {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Text(
-                        error,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(16.dp),
-                        textAlign = TextAlign.Center
-                    )
-                    Button(onClick = onRetry) {
-                        Text("Retry")
-                    }
-                }
-            }
+
             else -> {
                 RootList(pages = pages, onPageClick = onPageClick)
             }
@@ -132,16 +100,18 @@ fun RootList(
     pages: List<DataViewSpec>,
     onPageClick: (DataViewSpec) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth().padding(top = 40.dp)
+    ) {
         pages.forEach { page ->
             Text(
                 text = page.label,
                 textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.titleLarge,
+                fontSize = 40.sp,
                 modifier = Modifier
-                    .fillMaxWidth()
                     .clickable { onPageClick(page) }
-                    .padding(vertical = 12.dp, horizontal = 8.dp)
+                    .padding(vertical = 14.dp, horizontal = 18.dp)
             )
         }
     }
@@ -166,21 +136,7 @@ fun RootListPreview() {
 @Composable
 fun RootScreenLoadingPreview() {
     AppTheme {
-        RootScreenContent(isLoading = true, error = null, pages = emptyList(), onRetry = {}, onPageClick = {})
-    }
-}
-
-@Preview(device = Devices.DESKTOP)
-@Composable
-fun RootScreenErrorPreview() {
-    AppTheme {
-        RootScreenContent(
-            isLoading = false,
-            error = "Failed to load root: connection refused",
-            pages = emptyList(),
-            onRetry = {},
-            onPageClick = {}
-        )
+        RootScreenContent(isLoading = true, pages = emptyList(), onPageClick = {})
     }
 }
 
@@ -190,14 +146,11 @@ fun RootScreenNestedPagePreview() {
     AppTheme {
         RootScreenContent(
             isLoading = false,
-            error = null,
             pages = listOf(
                 FileBrowserSpec("Vacation Photos", listOf("second", "photos")),
                 FileBrowserSpec("Documents", listOf("second", "docs")),
             ),
-            onRetry = {},
             onPageClick = {},
-            onBack = {}
         )
     }
 }

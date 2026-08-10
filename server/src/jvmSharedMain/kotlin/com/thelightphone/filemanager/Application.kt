@@ -147,7 +147,7 @@ fun Application.module(
         // returns DirectoryMeta
         get("/api/meta/{path...}") {
             val filePath = call.parameters.getAll("path")?.joinToString("/") ?: "."
-            rootDataProvider.getMeta(Path.of(filePath)).fold(
+            rootDataProvider.getDirectoryMeta(Path.of(filePath)).fold(
                 onSuccess = { call.respond(HttpStatusCode.OK, it) },
                 onFailure = { call.respondError(it) }
             )

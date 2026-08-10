@@ -16,7 +16,7 @@ class ApplicationTest {
 
         override fun reportError(
             tag: String,
-            exception: Exception?,
+            exception: Throwable?,
             message: String
         ) {
             System.err.println("$tag: $message")

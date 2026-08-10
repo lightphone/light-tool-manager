@@ -11,21 +11,42 @@ import java.net.NetworkInterface
 
 fun main() {
     val resourceRoot = File(object {}.javaClass.getResource("/sample")!!.toURI())
-    val uploadsDir = resourceRoot.resolve("uploads").apply{ mkdirs() }
+    val uploadsDir = resourceRoot.resolve("Uploads").apply { mkdirs() }
     val allDirs = resourceRoot.listFiles { file -> file.isDirectory }.orEmpty().toList()
+    println(allDirs)
 
     val perDirViews = allDirs.map { dir ->
-        DataView(FileBrowserSpec(label = dir.name, path = listOf(dir.name)), FileFileTree(dir, emptyMap()))
+        DataView(
+            FileBrowserSpec(
+                label = dir.name,
+                path = listOf(dir.name),
+                headerText = "This directory is called: ${dir.name}\n\nFeel free to take a look around!"
+            ),
+            FileFileTree(dir, emptyMap())
+        )
     }
     val combinedView = DataView(
-        FileBrowserSpec(label = "all", path = listOf("all")),
+        FileBrowserSpec(label = "All Files", path = listOf("all"), headerText = "These are all of the files!"),
         FileFileTree(allDirs, uploadsDir, emptyMap())
     )
 
-    val secondLevel = DataView(RootViewSpec("Deeper", listOf("second")), StaticBranchProvider(perDirViews))
+    val uploadsDropBox = DataView(
+        DropboxSpec(
+            "Uploads Dropbox",
+            listOf(uploadsDir.name),
+            headerText = "This is the Uploads Dropbox\n" +
+                    "\n" +
+                    "When you upload here, your files will show in the Uploads directory!",
+            buttonText = "Click Here to Upload"
+        ),
+        FileFileTree(uploadsDir, emptyMap())
+    )
 
     val rootDataProvider = RootFileTree {
-        DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(perDirViews + combinedView + secondLevel))
+        DataView(
+            RootViewSpec("root", emptyList()),
+            StaticBranchProvider(perDirViews + combinedView + uploadsDropBox)
+        )
     }
     kotlinx.coroutines.runBlocking { rootDataProvider.refreshProviders() }
 
@@ -82,7 +103,7 @@ val logger = object : Logger {
 
     override fun reportError(
         tag: String,
-        exception: Exception?,
+        exception: Throwable?,
         message: String
     ) {
         System.err.println("Light File Manager - $tag: $message")

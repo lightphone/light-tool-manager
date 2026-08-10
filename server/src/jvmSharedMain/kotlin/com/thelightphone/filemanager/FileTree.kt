@@ -1,5 +1,11 @@
 package com.thelightphone.filemanager
 
+import com.thelightphone.filemanager.EntryType.Audio
+import com.thelightphone.filemanager.EntryType.Directory
+import com.thelightphone.filemanager.EntryType.GenericFile
+import com.thelightphone.filemanager.EntryType.Image
+import com.thelightphone.filemanager.EntryType.Text
+import com.thelightphone.filemanager.EntryType.Video
 import io.ktor.server.plugins.NotFoundException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -11,6 +17,8 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.collections.emptyMap
+import kotlin.collections.orEmpty
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isReadable
 import kotlin.io.path.name
@@ -64,8 +72,11 @@ interface LeafFileTree : FileTree {
     suspend fun <T> writeBytes(filePath: Path, block: suspend (OutputStream) -> T): Result<T>
     suspend fun delete(filePath: Path): Result<Int>
     suspend fun rename(filePath: Path, newName: String): Result<Boolean>
-    suspend fun getMeta(directoryPath: Path): Result<DirectoryMeta>
+    suspend fun getDirectoryMeta(directoryPath: Path): Result<DirectoryMeta>
     suspend fun notify(directoryPath: Path)
+
+    // opportunity for data provider to tack on additional data
+    fun appendMeta(entry: Entry): Entry = entry
 }
 
 interface BranchFileTree : FileTree {
@@ -235,9 +246,9 @@ class RootFileTree(
         }
     }
 
-    override suspend fun getMeta(directoryPath: Path): Result<DirectoryMeta> {
+    override suspend fun getDirectoryMeta(directoryPath: Path): Result<DirectoryMeta> {
         return withProvider(directoryPath) { dataProvider, subPath ->
-            dataProvider.getMeta(subPath)
+            dataProvider.getDirectoryMeta(subPath)
         }
     }
 
@@ -273,15 +284,26 @@ abstract class CachingFileTree(
     private val timeNow: () -> Instant = { Clock.System.now() }
 ) : LeafFileTree {
 
-    protected data class CachedEntries(
+    interface Cacheable {
+        val cachedAt: Instant
+    }
+
+    protected data class CachedEntries (
         val fileEntries: List<Entry>,
         val directoryEntries: List<Entry>,
-        val cachedAt: Instant
-    )
+        override val cachedAt: Instant
+    ): Cacheable
 
-    private val CachedEntries.isExpired: Boolean get() = timeNow() - cachedAt > cacheTtl
+    private data class CachedMeta(
+        val meta: Map<String, String>,
+        val lastModified: Long,
+        override val cachedAt: Instant
+    ): Cacheable
+
+    private val Cacheable.isExpired: Boolean get() = timeNow() - cachedAt > cacheTtl
 
     private val cache = ConcurrentHashMap<String, CachedEntries>()
+    private val metaDataCache = ConcurrentHashMap<String, CachedMeta>()
 
     protected abstract fun listEntries(path: Path): Result<List<Entry>>
     protected abstract fun openRead(filePath: Path): Result<InputStream>
@@ -291,12 +313,31 @@ abstract class CachingFileTree(
     protected abstract fun performCheckWrite(filePath: Path): WriteCheck
     abstract override suspend fun getThumbnailBytes(filePath: Path, type: EntryType): Result<InputStream>
 
+    protected open fun getMeta(entry: Entry): Map<String, String>? = null
+
+    override fun appendMeta(entry: Entry): Entry {
+        val cachedMeta = metaDataCache[entry.path]?.takeUnless { it.isExpired }
+        if (cachedMeta != null && cachedMeta.lastModified == entry.lastModified) {
+            return entry.copy(meta = cachedMeta.meta)
+        }
+
+        val meta = getMeta(entry)
+
+        return if (meta == null) {
+            entry
+        } else {
+            metaDataCache[entry.path] = CachedMeta(meta, entry.lastModified, Clock.System.now())
+            entry.copy(meta = meta)
+        }
+    }
+
     override suspend fun checkWrite(filePath: Path): WriteCheck {
         return if (readOnly) WriteCheck.ReadOnly else performCheckWrite(filePath)
     }
 
     override suspend fun invalidateCache() {
         cache.clear()
+        metaDataCache.clear()
     }
 
     override suspend fun notify(directoryPath: Path) {
@@ -313,7 +354,7 @@ abstract class CachingFileTree(
         cache.remove(parentKey)
     }
 
-    override suspend fun getMeta(directoryPath: Path): Result<DirectoryMeta> {
+    override suspend fun getDirectoryMeta(directoryPath: Path): Result<DirectoryMeta> {
         // subclasses can override if subdirectory fidelity needed
         return Result.success(DirectoryMeta(readOnly))
     }
@@ -475,7 +516,7 @@ open class FileFileTree(
                 Files.list(dir).use { stream ->
                     stream
                         .filter { !Files.isSymbolicLink(it) }
-                        .map { it.toEntry(root.toPath()) }
+                        .map { it.toEntry(root.toPath(), this::appendMeta) }
                         .toList()
                 }
             }.onSuccess { entries ->
@@ -592,7 +633,8 @@ open class FileFileTree(
             return if (resolved.isDirectory()) {
                 WriteCheck.DirectoryExists
             } else {
-                WriteCheck.FileExists(resolved.toEntry(root.toPath()))
+                // TODO append meta might not be necessary here
+                WriteCheck.FileExists(resolved.toEntry(root.toPath(), this::appendMeta))
             }
         }
         return WriteCheck.Safe
@@ -619,7 +661,7 @@ private val Path.entryType: EntryType
         return entryTypeForName(name)
     }
 
-private fun Path.toEntry(rootPath: Path): Entry {
+private fun Path.toEntry(rootPath: Path, appendMeta: (Entry) -> Entry): Entry {
     val attrs = Files.readAttributes(this, java.nio.file.attribute.BasicFileAttributes::class.java)
     // `this` is always a resolved real path (see resolveAndValidate), so rootPath must be
     // resolved too before relativizing, or a symlinked root (e.g. macOS's /tmp) produces
@@ -630,5 +672,5 @@ private fun Path.toEntry(rootPath: Path): Entry {
         path = rootPath.toRealPath().relativize(this).toString(),
         lastModified = attrs.lastModifiedTime().toMillis(),
         size = if (attrs.isDirectory) 0L else attrs.size()
-    )
+    ).let(appendMeta)
 }

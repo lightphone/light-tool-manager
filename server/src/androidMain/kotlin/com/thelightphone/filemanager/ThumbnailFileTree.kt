@@ -2,21 +2,27 @@ package com.thelightphone.filemanager
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
 import android.media.ThumbnailUtils
 import android.util.LruCache
 import android.util.Size
+import com.thelightphone.filemanager.EntryType.*
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Path
+import java.util.Locale
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 
 class ThumbnailFileTree(
     private val root: File,
     private val context: Context,
+    private val logger: Logger,
     defaultThumbnails: Map<EntryType, File>,
     readOnly: Boolean = false,
     maxCacheSizeBytes: Int = 16 * 1024 * 1024,
@@ -82,4 +88,37 @@ class ThumbnailFileTree(
             }
         }
     }
+
+    private fun Entry.fetchVideoMeta(): Map<String, String> {
+        val duration = MediaMetadataRetriever().use { mmr ->
+            try {
+                mmr.setDataSource(path)
+                mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            } catch (e: Exception) {
+                logger.reportError("ThumbnailFileTree", e, "Error fetching video metadata")
+                null
+            }?.milliseconds
+        }
+        // if it failed, still populate the cache so we don't keep looking for it
+        if (duration == null) return emptyMap()
+        return mapOf(
+            MetaKeys.DURATION to duration.format()
+        )
+    }
+
+    override fun getMeta(entry: Entry): Map<String, String>? {
+        return when (entry.type) {
+            Directory, GenericFile, Audio, Image, Text -> null
+            Video -> entry.fetchVideoMeta()
+        }
+    }
 }
+
+private fun Duration.format(locale: Locale = Locale.US): String =
+    toComponents { days, hours, minutes, seconds, _ ->
+        when {
+            days > 0 -> String.format(locale, "%d:%02d:%02d:%02d", days, hours, minutes, seconds)
+            hours > 0 -> String.format(locale, "%02d:%02d:%02d", hours, minutes, seconds)
+            else -> String.format(locale, "%02d:%02d", minutes, seconds)
+        }
+    }
