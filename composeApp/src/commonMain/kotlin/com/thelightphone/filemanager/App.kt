@@ -47,6 +47,7 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 
@@ -120,10 +121,24 @@ fun AppTheme(content: @Composable () -> Unit) {
     }
 }
 
-private val globalAlertFlow = MutableStateFlow<FileManagerAlert?>(null)
+private val globalAlertsFlow = MutableStateFlow<List<FileManagerAlert>>(emptyList())
+
+// Pushing an id already in the queue replaces that entry in place (e.g. the server-disconnected
+// banner keeps a fixed id) rather than adding a duplicate.
 fun pushGlobalAlert(alert: FileManagerAlert) {
-    globalAlertFlow.value = alert
+    val current = globalAlertsFlow.value
+    globalAlertsFlow.value = if (current.any { it.id == alert.id }) {
+        current.map { if (it.id == alert.id) alert else it }
+    } else {
+        current + alert
+    }
 }
+
+fun dismissGlobalAlert(id: String) {
+    globalAlertsFlow.value = globalAlertsFlow.value.filterNot { it.id == id }
+}
+
+private const val ServerDisconnectedAlertId = "server-disconnected"
 
 @Composable
 fun App() {
@@ -196,34 +211,45 @@ fun App() {
             }
         }
 
-        var serverAlert by remember { mutableStateOf<FileManagerAlert?>(null) }
-
-        // Server connectivity polling
+        // Server connectivity polling. The banner isn't a transient toast, so it's pushed once
+        // per state transition (not re-pushed every poll tick) and given an infinite duration —
+        // it's dismissed explicitly on reconnect rather than timing itself out.
         LaunchedEffect(Unit) {
             val pollDuration = 6.seconds
-            fun newAlert() = FileManagerAlert(
-                "Error: Server Disconnected",
-                duration = pollDuration + 1.seconds,
-                dismissable = false
-            )
+            var wasConnected = true
             while (true) {
                 delay(pollDuration)
-                try {
-                    val success = client.get("${getBaseUrl()}/ping").status.isSuccess()
-                    serverAlert = if (success) null else newAlert()
+                val success = try {
+                    client.get("${getBaseUrl()}/ping").status.isSuccess()
                 } catch (_: Throwable) {
-                    serverAlert = newAlert()
+                    false
+                }
+                if (success != wasConnected) {
+                    wasConnected = success
+                    if (success) {
+                        dismissGlobalAlert(ServerDisconnectedAlertId)
+                    } else {
+                        pushGlobalAlert(
+                            FileManagerAlert(
+                                "Error: Server Disconnected",
+                                id = ServerDisconnectedAlertId,
+                                duration = Duration.INFINITE,
+                                dismissable = false
+                            )
+                        )
+                    }
                 }
             }
         }
 
-        val alert by globalAlertFlow.collectAsState()
+        val alerts by globalAlertsFlow.collectAsState()
         val onBackPressed = if (backStack.isEmpty()) null else ::navigateBack
 
         FileManagerScreen(
             onBackPressed = onBackPressed,
             title = currentSpec?.label ?: "File Manager",
-            alert = serverAlert ?: alert
+            alerts = alerts,
+            onDismissAlert = ::dismissGlobalAlert
         ) {
             Column(
                 modifier = Modifier

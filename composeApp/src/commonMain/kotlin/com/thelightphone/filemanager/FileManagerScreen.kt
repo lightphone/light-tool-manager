@@ -1,6 +1,11 @@
 package com.thelightphone.filemanager
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
@@ -28,6 +33,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.NonRestartableComposable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,25 +59,14 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
-// Colors come from MaterialTheme.colorScheme (set up once in App.kt's AppTheme) instead of a
-// screen-local color bag, so this screen stays in sync with the rest of the app's theme.
 @Composable
 fun FileManagerScreen(
     onBackPressed: (() -> Unit)?,
     title: String? = null,
-    alert: FileManagerAlert? = null,
+    alerts: List<FileManagerAlert> = emptyList(),
+    onDismissAlert: (String) -> Unit = {},
     content: @Composable () -> Unit
 ) {
-    var alertVisible by remember { mutableStateOf(alert != null) }
-    LaunchedEffect(alert) {
-        if (alert != null) {
-            alertVisible = true
-            delay(alert.duration)
-            alertVisible = false
-        } else {
-            alertVisible = false
-        }
-    }
     Box(
         contentAlignment = Alignment.TopCenter,
         modifier = Modifier
@@ -93,7 +89,7 @@ fun FileManagerScreen(
                             .padding(18.dp)
                             .fillMaxHeight()
                             .clickable {
-                                if(!InterceptorRegistry.dispatch()) {
+                                if (!InterceptorRegistry.dispatch()) {
                                     onBackPressed()
                                 }
                             }
@@ -110,16 +106,120 @@ fun FileManagerScreen(
             }
             content()
         }
-        AnimatedVisibility(
-            alertVisible,
-            enter = slideInHorizontally(initialOffsetX = { fullWidth -> fullWidth }),
-            exit = slideOutHorizontally(targetOffsetX = { fullWidth -> fullWidth }),
+        AlertStack(
+            alerts = alerts,
+            onDismiss = onDismissAlert,
             modifier = Modifier.align(Alignment.BottomEnd).padding(30.dp)
-        ) {
-            alert?.let {
-                Alert(it) { alertVisible = false }
+        )
+    }
+}
+
+private const val AlertAnimationDurationMs = 250
+
+// Alerts stack bottom-to-top from the bottom-right corner: new ones are appended to `alerts`
+// and land at the bottom of the column, closest to the corner, pushing earlier ones up.
+@Composable
+private fun AlertStack(
+    alerts: List<FileManagerAlert>,
+    onDismiss: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val rendered = remember { mutableStateListOf<FileManagerAlert>() }
+    val transitionStates = remember { mutableStateMapOf<String, MutableTransitionState<Boolean>>() }
+
+    LaunchedEffect(alerts) {
+        val currentIds = alerts.map { it.id }.toSet()
+
+        for (alert in alerts) {
+            val existingIndex = rendered.indexOfFirst { it.id == alert.id }
+            if (existingIndex == -1) {
+                rendered.add(alert)
+                transitionStates[alert.id] =
+                    MutableTransitionState(false).apply { targetState = true }
+            } else {
+                rendered[existingIndex] = alert
             }
         }
+
+        // Alerts no longer wanted (timed out, dismissed, or removed by the caller) start their
+        // exit transition here; AlertStackItem removes them from `rendered` once it finishes.
+        for (alert in rendered) {
+            if (alert.id !in currentIds) {
+                transitionStates[alert.id]?.targetState = false
+            }
+        }
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        for (alert in rendered.toList()) {
+            key(alert.id) {
+                // Per the invariant above, an id is only ever added to `rendered` in the same
+                // pass it's added to `transitionStates`, so this always exists; getOrPut (rather
+                // than a `?: return@key` early-out) avoids non-local control flow out of a
+                // for-loop-wrapped inline composable, which trips a ClassFormatError in the
+                // layoutlib preview renderer ("Illegal method name \"<anonymous>\"").
+                val transitionState = transitionStates.getOrPut(alert.id) {
+                    MutableTransitionState(false).apply { targetState = true }
+                }
+                AlertStackItem(
+                    alert = alert,
+                    transitionState = transitionState,
+                    onRequestDismiss = { transitionState.targetState = false },
+                    onExitFinished = {
+                        rendered.removeAll { it.id == alert.id }
+                        transitionStates.remove(alert.id)
+                        onDismiss(alert.id)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlertStackItem(
+    alert: FileManagerAlert,
+    transitionState: MutableTransitionState<Boolean>,
+    onRequestDismiss: () -> Unit,
+    onExitFinished: () -> Unit
+) {
+    val latestOnRequestDismiss by rememberUpdatedState(onRequestDismiss)
+    val latestOnExitFinished by rememberUpdatedState(onExitFinished)
+
+    LaunchedEffect(alert.id, alert.duration) {
+        delay(alert.duration)
+        latestOnRequestDismiss()
+    }
+
+    // currentState catches up to targetState once a transition finishes; currentState == false
+    // while targetState is also false (as opposed to false-because-not-yet-entered) means the
+    // exit animation just completed.
+    LaunchedEffect(transitionState.currentState, transitionState.targetState) {
+        if (!transitionState.currentState && !transitionState.targetState) {
+            latestOnExitFinished()
+        }
+    }
+
+    AnimatedVisibility(
+        visibleState = transitionState,
+        enter = slideInHorizontally(
+            animationSpec = tween(AlertAnimationDurationMs),
+            initialOffsetX = { fullWidth -> fullWidth }
+        ) + fadeIn(tween(AlertAnimationDurationMs)),
+        exit = slideOutHorizontally(
+            animationSpec = tween(AlertAnimationDurationMs),
+            targetOffsetX = { fullWidth -> fullWidth }
+        ) + shrinkVertically(tween(AlertAnimationDurationMs)) + fadeOut(
+            tween(
+                AlertAnimationDurationMs
+            )
+        )
+    ) {
+        Alert(alert, onDismiss = latestOnRequestDismiss)
     }
 }
 
@@ -188,8 +288,13 @@ fun SpecHeaderText(spec: DataViewSpec) {
 object InterceptorRegistry {
     private val listeners = mutableStateMapOf<Any, () -> Boolean>()
 
-    fun put(key: Any, l: () -> Boolean) { listeners[key] = l }
-    fun remove(key: Any) { listeners.remove(key) }
+    fun put(key: Any, l: () -> Boolean) {
+        listeners[key] = l
+    }
+
+    fun remove(key: Any) {
+        listeners.remove(key)
+    }
 
     fun dispatch() = listeners.values.toList().map { it() }.any { it }
 }
@@ -224,12 +329,17 @@ fun AlertPreview() {
 @OptIn(ExperimentalUuidApi::class)
 @Composable
 fun FileManagerScreenPreview() {
-    var alert by remember { mutableStateOf<FileManagerAlert?>(null) }
+    var alerts by remember { mutableStateOf<List<FileManagerAlert>>(emptyList()) }
     AppTheme {
-        FileManagerScreen(onBackPressed = {}, title = "Title", alert = alert) {
+        FileManagerScreen(
+            onBackPressed = {},
+            title = "Title",
+            alerts = alerts,
+            onDismissAlert = { id -> alerts = alerts.filterNot { it.id == id } }
+        ) {
             Text("Screen content goes here", Modifier.clickable {
                 val uuidString = Uuid.random().toString()
-                alert = FileManagerAlert(uuidString, uuidString)
+                alerts = alerts + FileManagerAlert(uuidString, uuidString)
             })
         }
     }
