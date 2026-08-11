@@ -32,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +68,7 @@ import com.thelightphone.filemanager.composeapp.generated.resources.ic_text_file
 import com.thelightphone.filemanager.composeapp.generated.resources.ic_audio_waveform
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
@@ -112,6 +114,7 @@ fun EntriesScreen(
     var lastSelectedIndex by remember(currentPath) { mutableStateOf<Int?>(null) }
     var isReadOnly by remember(currentPath) { mutableStateOf(true) }
     var isUploading by remember(currentPath) { mutableStateOf(false) }
+    val showDeleteConfirmation = remember(currentPath) { mutableStateOf(false) }
     val pageSize = 20
 
     val coroutineScope = rememberCoroutineScope()
@@ -202,7 +205,10 @@ fun EntriesScreen(
     }
 
     fun navigateBack(): Boolean {
-        return if (currentPath == rootPath) {
+        return if (showDeleteConfirmation.value) {
+            showDeleteConfirmation.value = false
+            true
+        } else if (currentPath == rootPath) {
             false
         } else {
             currentPath = currentPath.substringBeforeLast("/")
@@ -235,6 +241,7 @@ fun EntriesScreen(
         selectedPaths = selectedPaths,
         isReadOnly = isReadOnly,
         isUploading = isUploading,
+        showDeleteConfirmation = showDeleteConfirmation,
         onRetry = { loadEntries(it, 1) },
         onLoadMore = { loadEntries(sort, currentPage + 1, append = true) },
         onEntryClick = { entry, index, accumulate ->
@@ -248,6 +255,13 @@ fun EntriesScreen(
         },
         onClearSelection = { selectedPaths = emptySet() },
         onDownloadSelected = ::downloadSelected,
+        performDelete = suspend {
+            deleteFiles(selectedPaths.toList(), client) {
+                selectedPaths = emptySet()
+                loadEntries(sort, 1)
+            }
+            showDeleteConfirmation.value = false
+        },
         onUpload = ::onUpload
     )
 }
@@ -263,33 +277,25 @@ private fun EntriesScreenContent(
     selectedPaths: Set<String>,
     isReadOnly: Boolean,
     isUploading: Boolean,
+    showDeleteConfirmation: MutableState<Boolean>,
     sort: Sort,
     onRetry: (Sort) -> Unit,
     onLoadMore: () -> Unit,
     onEntryClick: (Entry, Int, Boolean) -> Unit,
     onClearSelection: () -> Unit,
     onDownloadSelected: () -> Unit,
+    performDelete: suspend () -> Unit,
     onUpload: (files: List<Pair<String, ByteArray>>) -> Unit
 ) {
     val gridState = rememberLazyGridState()
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
-
-    // Tracked via key down/up rather than read off the click event itself, matching the existing
-    // Escape-key handling below. Reset on focus loss so alt-tabbing away mid-hold can't leave
-    // this stuck true forever (the matching KeyUp would never arrive to clear it otherwise).
     var isShiftPressed by remember { mutableStateOf(false) }
-
-    // Infinite scroll. isLoadingMore/hasMorePages/isLoading/onLoadMore are read through
-    // rememberUpdatedState rather than captured directly: this effect is keyed only on
-    // (gridState, currentPath) so its coroutine is launched once per folder and never
-    // restarts, which means a directly-captured plain parameter would stay frozen at
-    // whatever value it held when the coroutine launched (isLoading, e.g., starts out
-    // true) instead of tracking later recompositions.
     val latestIsLoadingMore by rememberUpdatedState(isLoadingMore)
     val latestHasMorePages by rememberUpdatedState(hasMorePages)
     val latestIsLoading by rememberUpdatedState(isLoading)
     val latestOnLoadMore by rememberUpdatedState(onLoadMore)
+    val showDelete by showDeleteConfirmation
     LaunchedEffect(gridState, currentPath) {
         snapshotFlow {
             val layoutInfo = gridState.layoutInfo
@@ -303,117 +309,140 @@ private fun EntriesScreenContent(
         }
     }
 
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Box(
         modifier = Modifier
             .fillMaxHeight()
             .widthIn(max = InnerColumnWidth)
-            .focusRequester(focusRequester)
-            .focusable()
-            .onFocusChanged { if (!it.hasFocus) isShiftPressed = false }
-            .onPreviewKeyEvent { event ->
-                when {
-                    event.key == Key.ShiftLeft || event.key == Key.ShiftRight -> {
-                        isShiftPressed = event.type == KeyEventType.KeyDown
-                        false
-                    }
-                    event.type == KeyEventType.KeyDown && event.key == Key.Escape -> {
-                        onClearSelection()
-                        true
-                    }
-                    else -> false
-                }
-            }
     ) {
-        when {
-            isLoading -> {
-                SpecHeaderText(spec)
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onBackground)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(focusRequester)
+                .focusable()
+                .onFocusChanged { if (!it.hasFocus) isShiftPressed = false }
+                .onPreviewKeyEvent { event ->
+                    when {
+                        event.key == Key.ShiftLeft || event.key == Key.ShiftRight -> {
+                            isShiftPressed = event.type == KeyEventType.KeyDown
+                            false
+                        }
+
+                        event.type == KeyEventType.KeyDown && event.key == Key.Escape -> {
+                            onClearSelection()
+                            true
+                        }
+
+                        else -> false
+                    }
                 }
-            }
-
-            else -> {
-                EntryList(
-                    entries = entries,
-                    gridState = gridState,
-                    isLoadingMore = isLoadingMore,
-                    selectedPaths = selectedPaths,
-                    onEntryClick = { entry, index -> onEntryClick(entry, index, isShiftPressed) },
-                    scrollingHeader = { SpecHeaderText(spec) }
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .widthIn(max = InnerColumnWidth)
-                            .background(MaterialTheme.colorScheme.background)
+        ) {
+            when {
+                isLoading -> {
+                    SpecHeaderText(spec)
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
                     ) {
-                        val optionsSelected = selectedPaths.isNotEmpty()
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            Row(Modifier.weight(1f)) {
-                                Icon(
-                                    painter = painterResource(Res.drawable.ic_reverse_order_white),
-                                    contentDescription = "Reverse Sort Order",
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clickable {
-                                            val newOrder =
-                                                if (sort.sortOrder == SortOrder.ASC) SortOrder.DESC else SortOrder.ASC
-                                            onRetry(sort.copy(sortOrder = newOrder))
-                                        }
-                                )
-                            }
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    painter = painterResource(Res.drawable.ic_trash),
-                                    contentDescription = "Delete",
-                                    tint = if (optionsSelected) EnabledColor else DisabledColor,
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clickable(enabled = optionsSelected) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.onBackground)
+                    }
+                }
 
-                                        }
-                                )
-                                TextButton(
-                                    text = "download",
-                                    onClick = onDownloadSelected,
-                                    enabled = optionsSelected
-                                )
-                                if (!isReadOnly) {
-                                    TextButton(
-                                        text = "upload",
-                                        onClick = {
-                                            triggerFilePicker(onFilesSelected = { files -> onUpload(files) })
-                                        },
-                                        enabled = !isUploading
+                else -> {
+                    EntryList(
+                        entries = entries,
+                        gridState = gridState,
+                        isLoadingMore = isLoadingMore,
+                        selectedPaths = selectedPaths,
+                        onEntryClick = { entry, index ->
+                            onEntryClick(
+                                entry,
+                                index,
+                                isShiftPressed
+                            )
+                        },
+                        scrollingHeader = { SpecHeaderText(spec) }
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .widthIn(max = InnerColumnWidth)
+                                .background(MaterialTheme.colorScheme.background)
+                        ) {
+                            val optionsSelected = selectedPaths.isNotEmpty()
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Row(Modifier.weight(1f)) {
+                                    Icon(
+                                        painter = painterResource(Res.drawable.ic_reverse_order_white),
+                                        contentDescription = "Reverse Sort Order",
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clickable {
+                                                val newOrder =
+                                                    if (sort.sortOrder == SortOrder.ASC) SortOrder.DESC else SortOrder.ASC
+                                                onRetry(sort.copy(sortOrder = newOrder))
+                                            }
                                     )
                                 }
-                            }
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (!isReadOnly) {
+                                        Icon(
+                                            painter = painterResource(Res.drawable.ic_trash),
+                                            contentDescription = "Delete",
+                                            tint = if (optionsSelected) EnabledColor else DisabledColor,
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clickable(enabled = optionsSelected) {
+                                                    showDeleteConfirmation.value = true
+                                                }
+                                        )
+                                    }
+                                    TextButton(
+                                        text = "download",
+                                        onClick = onDownloadSelected,
+                                        enabled = optionsSelected
+                                    )
+                                    if (!isReadOnly) {
+                                        TextButton(
+                                            text = "upload",
+                                            onClick = {
+                                                triggerFilePicker(onFilesSelected = { files ->
+                                                    onUpload(
+                                                        files
+                                                    )
+                                                })
+                                            },
+                                            enabled = !isUploading
+                                        )
+                                    }
+                                }
 
+                            }
+                            Spacer(Modifier.height(30.dp))
                         }
-                        Spacer(Modifier.height(30.dp))
                     }
                 }
             }
+        }
+
+        if (showDelete) {
+            val numFiles = selectedPaths.size
+            ConfirmationScreen(
+                title = "Delete files",
+                "Are you sure you want to delete $numFiles file(s)?\n\n You cannot undo this.",
+                "delete files",
+                action = performDelete
+            )
         }
     }
 }
 
 private val AlertBatchWindow = 1.seconds
 
-// Batches upload results that land within a short window into one alert instead of a flood of
-// one-per-file toasts (e.g. a fast batch of small files landing well under a second apart). The
-// window is anchored to the first result added to an empty batch rather than reset by each new
-// arrival, so a steady trickle of slow uploads can't delay every alert indefinitely. `flushNow`
-// lets the caller collapse the wait once it knows no more results are coming (the whole upload
-// finished) instead of always sitting out the rest of the window for nothing.
 private class AlertBatch(
     private val scope: CoroutineScope,
     private val emit: (names: List<String>, remaining: Int) -> Unit
@@ -511,6 +540,44 @@ suspend fun uploadFiles(
 
     onSuccess()
     onIsUploading(false)
+}
+
+suspend fun deleteFiles(
+    paths: List<String>,
+    client: HttpClient,
+    onAlert: (FileManagerAlert) -> Unit = ::pushGlobalAlert,
+    onSuccess: () -> Unit,
+) {
+    if (paths.isEmpty()) return
+
+    coroutineScope {
+        val successes = AlertBatch(this) { names, _ ->
+            onAlert(FileManagerAlert(batchedMessage(names, "deleted successfully")))
+        }
+        val failures = AlertBatch(this) { names, _ ->
+            onAlert(FileManagerAlert(batchedMessage(names, "failed to delete")))
+        }
+
+        for (path in paths) {
+            val fileName = path.substringAfterLast('/')
+            runCatching {
+                client.delete("${getBaseUrl()}/api/files/$path")
+            }.onSuccess { response ->
+                if (response.status.isSuccess()) {
+                    successes.add(fileName, 0)
+                } else {
+                    failures.add(fileName, 0)
+                }
+            }.onFailure {
+                failures.add(fileName, 0)
+            }
+        }
+
+        successes.flushNow()
+        failures.flushNow()
+    }
+
+    onSuccess()
 }
 
 @Composable
@@ -761,6 +828,7 @@ fun EntriesScreenContentPreview() {
             previewEntries.sortedByDescending { it.title }
         }
     }
+    val showDeleteConfirmation = remember { mutableStateOf(false) }
     val spec = FileBrowserSpec("Files", listOf("files"), "Sample text options.")
     AppTheme {
         EntriesScreenContent(
@@ -774,11 +842,16 @@ fun EntriesScreenContentPreview() {
             selectedPaths = setOf("photos/photo.jpg"),
             isReadOnly = false,
             isUploading = false,
+            showDeleteConfirmation = showDeleteConfirmation,
             onRetry = { sort = it },
             onLoadMore = {},
             onEntryClick = { _, _, _ -> },
             onClearSelection = {},
             onDownloadSelected = {},
+            performDelete = {
+                delay(2.seconds)
+                showDeleteConfirmation.value = false
+            },
             onUpload = {}
         )
     }
@@ -800,11 +873,13 @@ fun EntriesScreenContentLoadingPreview() {
             selectedPaths = emptySet(),
             isReadOnly = true,
             isUploading = false,
+            showDeleteConfirmation = mutableStateOf(false),
             onRetry = {},
             onLoadMore = {},
             onEntryClick = { _, _, _ -> },
             onClearSelection = {},
             onDownloadSelected = {},
+            performDelete = {},
             onUpload = {}
         )
     }

@@ -95,9 +95,10 @@ fun FileManagerScreen(
                             }
                     )
                 }
-                if (title != null) {
+                val effectiveTitle = TitleOverrideRegistry.current ?: title
+                if (effectiveTitle != null) {
                     Text(
-                        title,
+                        effectiveTitle,
                         textDecoration = TextDecoration.Underline,
                         fontSize = 24.sp,
                         modifier = Modifier.align(Alignment.Center)
@@ -311,6 +312,36 @@ fun BackClickInterceptor(
     DisposableEffect(InterceptorRegistry, key, enabled) {
         if (enabled) InterceptorRegistry.put(key) { latest() }
         onDispose { InterceptorRegistry.remove(key) }
+    }
+}
+
+// Same shape as InterceptorRegistry, for the same reason: a screen nested arbitrarily deep below
+// FileManagerScreen (e.g. a confirmation dialog inside EntriesScreen) has no direct handle on
+// FileManagerScreen's own `title` prop to change it temporarily. Unlike back-click interception,
+// only one title can be shown at a time, so there's no aggregation — just "whatever was
+// registered most recently wins" (in practice only one screen ever registers at once).
+object TitleOverrideRegistry {
+    private val overrides = mutableStateMapOf<Any, String>()
+
+    fun put(key: Any, title: String) {
+        overrides[key] = title
+    }
+
+    fun remove(key: Any) {
+        overrides.remove(key)
+    }
+
+    val current: String? get() = overrides.values.lastOrNull()
+}
+
+@Composable
+@NonRestartableComposable
+fun TitleOverride(title: String) {
+    val key = remember { Any() }
+
+    DisposableEffect(TitleOverrideRegistry, key, title) {
+        TitleOverrideRegistry.put(key, title)
+        onDispose { TitleOverrideRegistry.remove(key) }
     }
 }
 
