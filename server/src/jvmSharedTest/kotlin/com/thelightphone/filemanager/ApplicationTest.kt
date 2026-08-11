@@ -1,5 +1,8 @@
 package com.thelightphone.filemanager
 
+import com.thelightphone.filemanager.datatree.FileDataTree
+import com.thelightphone.filemanager.datatree.RootDataTree
+import com.thelightphone.filemanager.datatree.StaticBranchProvider
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -29,9 +32,20 @@ class ApplicationTest {
         val tempDir = File(System.getProperty("java.io.tmpdir"), "apptest-${System.nanoTime()}")
         tempDir.mkdirs()
         try {
-            val provider = FileFileTree(tempDir, emptyMap())
-            val view = DataView(FileBrowserSpec("files", listOf("files")), provider)
-            val rootProvider = RootFileTree { DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(listOf(view))) }
+            val provider = FileDataTree(
+                tempDir,
+                emptyMap()
+            )
+            val view = LeafView(FileBrowserSpec("files", "files"), provider)
+            val rootProvider =
+                RootDataTree {
+                    BranchView(
+                        RootViewSpec("root", ""),
+                        StaticBranchProvider(
+                            listOf(view)
+                        )
+                    )
+                }
             rootProvider.refreshProviders()
 
             application {

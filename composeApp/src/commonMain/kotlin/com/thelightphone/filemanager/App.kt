@@ -179,8 +179,8 @@ fun App() {
         fun navigateTo(spec: DataViewSpec, pushState: Boolean = true) {
             backStack = backStack + currentSpec
             currentSpec = spec
-            visitedSpecs = visitedSpecs + (spec.path.joinToString("/") to spec)
-            if (pushState) pushBrowserState(spec.path.joinToString("/"))
+            visitedSpecs = visitedSpecs + (spec.path to spec)
+            if (pushState) pushBrowserState(spec.path)
         }
 
         fun navigateToRoot(pushState: Boolean = true) {
@@ -193,7 +193,7 @@ fun App() {
             val previous = backStack.lastOrNull()
             backStack = backStack.dropLast(1)
             currentSpec = previous
-            pushBrowserState(previous?.path?.joinToString("/"))
+            pushBrowserState(previous?.path)
         }
 
         // Handle browser back/forward. A path string resolves against specs visited this
@@ -280,15 +280,13 @@ fun App() {
                         spec = spec,
                     )
 
-                    is ConfiguratorSpec -> TODO()
+                    is CustomSpec -> { /*Do not render anything for custom specs */ }
                 }
             }
         }
     }
 }
 
-val DataViewSpec.asPathString: String
-    get() = path.joinToString("/")
 
 fun Modifier.dashedBorder(
     width: Dp,

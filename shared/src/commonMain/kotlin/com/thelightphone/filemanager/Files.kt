@@ -13,7 +13,7 @@ data class Entry(
     val title: String,
     val path: String,
     val lastModified: Long,
-    val size: Long,
+    val size: Long? = 0L,
     // whether the file actually sits on the server, or needs to be proxied through it (light notes, for example)
     val remote: Boolean = false,
     val meta: Map<String, String>? = null

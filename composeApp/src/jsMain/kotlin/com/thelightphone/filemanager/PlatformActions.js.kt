@@ -16,10 +16,8 @@ actual fun getApiKey(): String? {
     if (!apiKeyExtracted) {
         apiKeyExtracted = true
         val hash = window.location.hash.removePrefix("#")
-        if (hash.length == 64 && hash.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+        if (hash.isNotEmpty()) {
             cachedApiKey = hash
-            // Persist before stripping the hash below, so a later refresh (which has no hash to
-            // read) can still recover the key.
             sessionStorage.setItem(API_KEY_STORAGE_KEY, hash)
             window.history.replaceState(null, "", window.location.pathname)
         } else {

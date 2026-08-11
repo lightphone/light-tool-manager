@@ -13,10 +13,13 @@ import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Duration
 import java.time.Instant
 import java.util.Base64
 
+// This file was mostly written by an LLM, but reviewed by a human
 private const val CERT_URL = "https://local-ip.co/cert/server.pem"
 private const val CHAIN_URL = "https://local-ip.co/cert/chain.pem"
 private const val KEY_URL = "https://local-ip.co/cert/server.key"
@@ -24,6 +27,12 @@ private const val KEY_URL = "https://local-ip.co/cert/server.key"
 private const val CERT_FILE = "server.pem"
 private const val CHAIN_FILE = "chain.pem"
 private const val KEY_FILE = "server.key"
+
+// Authority Information Access extension (RFC 5280 4.2.2.1) and its "CA Issuers" access method —
+// used to fetch a missing intermediate directly from the issuing CA when chain.pem doesn't have it.
+private const val AIA_EXTENSION_OID = "1.3.6.1.5.5.7.1.1"
+private const val CA_ISSUERS_OID = "1.3.6.1.5.5.7.48.2"
+private const val MAX_CHAIN_LENGTH = 5
 
 // Treat certs within this window of notAfter as already expired, so we refresh
 // before they actually start failing handshakes.
@@ -36,7 +45,7 @@ class SslConfig(private val logger: Logger) {
 
     fun loadKeyStore(
         cacheDir: File,
-        password: CharArray = "changeit".toCharArray()
+        password: CharArray = "changeit".toCharArray() // arbitrary password is fine here
     ): KeyStore {
         val certs = obtainCerts(cacheDir)
         return buildKeyStore(certs, password)
@@ -103,11 +112,29 @@ class SslConfig(private val logger: Logger) {
         return Certs(cert, chain, key)
     }
 
+    // Writes each file to a temp path first and only renames into place once all three downloads
+    // have fully landed on disk, so a crash mid-write can't leave a mismatched cert/chain/key
+    // triple cached — which would otherwise pass isExpiringSoon (the leaf's notAfter looks fine)
+    // and get reused indefinitely, breaking every handshake until the cache dir is cleared by hand.
     private fun writeToDir(dir: File, certs: Certs) {
         dir.mkdirs()
-        File(dir, CERT_FILE).writeBytes(certs.cert)
-        File(dir, CHAIN_FILE).writeBytes(certs.chain)
-        File(dir, KEY_FILE).writeBytes(certs.key)
+        val pending = listOf(
+            File(dir, CERT_FILE) to certs.cert,
+            File(dir, CHAIN_FILE) to certs.chain,
+            File(dir, KEY_FILE) to certs.key,
+        ).map { (dest, bytes) ->
+            val temp = File(dir, "${dest.name}.tmp")
+            temp.writeBytes(bytes)
+            temp to dest
+        }
+        for ((temp, dest) in pending) {
+            Files.move(
+                temp.toPath(),
+                dest.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE
+            )
+        }
     }
 
     private fun downloadCerts(): Certs = runBlocking(Dispatchers.IO) {
@@ -151,8 +178,8 @@ class SslConfig(private val logger: Logger) {
             .map { it as X509Certificate }
 
         val fullChain = buildValidatedChain(serverCert, chainCerts)
-        if (chainCerts.isNotEmpty() && fullChain.size == 1) {
-            logger.log(TAG, "chain.pem does not chain to server.pem; serving leaf only")
+        if (fullChain.size == 1) {
+            logger.log(TAG, "Could not complete cert chain via chain.pem or AIA fetch; serving leaf only")
         }
 
         val privateKey = parsePrivateKey(certs.key)
@@ -162,8 +189,14 @@ class SslConfig(private val logger: Logger) {
         return keyStore
     }
 
-    // Walk from the leaf and only include intermediates whose subject matches the
-    // previous cert's issuer, so PKCS12 won't reject a stale/mismatched chain.pem.
+    // Walk from the leaf toward a self-signed root. Prefers intermediates already present in
+    // chain.pem, matched by subject == previous cert's issuer (so PKCS12 won't reject a
+    // stale/mismatched chain.pem). If chain.pem doesn't have the right intermediate — observed in
+    // practice: local-ip.co's published chain.pem can drift out of sync with whichever CA is
+    // currently issuing server.pem — fetches the missing issuer via the cert's Authority
+    // Information Access "CA Issuers" URL instead. That's the same mechanism most OS trust stores
+    // (e.g. macOS's, which is why curl succeeds where Node-based clients don't) use to complete
+    // chains a server gets wrong, so this makes us resilient to the same class of mismatch.
     private fun buildValidatedChain(
         leaf: X509Certificate,
         intermediates: List<X509Certificate>
@@ -171,13 +204,126 @@ class SslConfig(private val logger: Logger) {
         val bySubject = intermediates.associateBy { it.subjectX500Principal }
         val chain = mutableListOf(leaf)
         var current = leaf
-        while (current.issuerX500Principal != current.subjectX500Principal) {
-            val next = bySubject[current.issuerX500Principal] ?: break
-            if (next in chain) break
+        var usedAiaFetch = false
+        // Real chains are leaf -> intermediate(s) -> root, essentially never more than a handful
+        // of hops. Caps how many AIA fetches a misbehaving/compromised upstream could force.
+        while (current.issuerX500Principal != current.subjectX500Principal && chain.size < MAX_CHAIN_LENGTH) {
+            val next = bySubject[current.issuerX500Principal]
+                ?: fetchIssuerCert(current)?.also { usedAiaFetch = true }
+            if (next == null || next in chain) break
             chain.add(next)
             current = next
         }
+        if (usedAiaFetch && chain.size > 1) {
+            logger.log(
+                TAG,
+                "chain.pem missing current intermediate for server.pem; completed chain via AIA fetch"
+            )
+        }
         return chain.toTypedArray()
+    }
+
+    private fun fetchIssuerCert(cert: X509Certificate): X509Certificate? {
+        // caIssuerUrl hand-parses DER out of a cert extension; malformed input (e.g. a length
+        // field that overflows the multi-byte-length loop) should fail this one lookup, not crash
+        // the whole loadKeyStore() call — which currently has no caller-side catch of its own.
+        val url = runCatching { caIssuerUrl(cert) }
+            .onFailure { logger.reportError(TAG, Exception(it), "Error parsing AIA extension") }
+            .getOrNull() ?: return null
+        // AIA URLs are conventionally plain http:// — CDNs hosting these almost always answer on
+        // https:// too, and Android blocks cleartext HTTP by default (API 28+), so this would
+        // otherwise silently fail on-device even though it works fine on desktop JVM.
+        val httpsUrl = if (url.startsWith("http://")) "https://" + url.removePrefix("http://") else null
+
+        if (httpsUrl != null) {
+            fetchCert(httpsUrl).onSuccess { return it }
+                .onFailure {
+                    logger.reportError(TAG, Exception(it), "Error fetching issuer cert via AIA over https: $httpsUrl")
+                }
+        }
+
+        return fetchCert(url)
+            .onFailure { logger.reportError(TAG, Exception(it), "Error fetching issuer cert via AIA: $url") }
+            .getOrNull()
+    }
+
+    private fun fetchCert(url: String): Result<X509Certificate> = runCatching {
+        // loadKeyStore is called synchronously from FileManagerServiceAndroid.start(), which runs
+        // on the main thread — same reason downloadCerts() below dispatches its network calls too.
+        val bytes = runBlocking(Dispatchers.IO) { httpGet(url) }
+        val cf = CertificateFactory.getInstance("X.509")
+        cf.generateCertificate(ByteArrayInputStream(bytes)) as X509Certificate
+    }
+
+    // Extracts the "CA Issuers" URI from a certificate's Authority Information Access extension
+    // (RFC 5280 4.2.2.1). No off-the-shelf parser for this is available on Android without
+    // pulling in BouncyCastle, so this reads the handful of DER TLVs involved by hand.
+    private fun caIssuerUrl(cert: X509Certificate): String? {
+        val extnValue = cert.getExtensionValue(AIA_EXTENSION_OID) ?: return null
+        // extnValue is itself DER: an OCTET STRING wrapping the real AuthorityInfoAccessSyntax.
+        val outer = readDerTlv(extnValue, 0) ?: return null
+        val sequence = readDerTlv(outer.content, 0) ?: return null
+
+        var offset = 0
+        val body = sequence.content
+        while (offset < body.size) {
+            val accessDescription = readDerTlv(body, offset) ?: break
+            val oidTlv = readDerTlv(accessDescription.content, 0)
+            val nameTlv = oidTlv?.let { readDerTlv(accessDescription.content, it.nextOffset) }
+            if (oidTlv != null && nameTlv != null) {
+                val isCaIssuers = decodeOid(oidTlv.content) == CA_ISSUERS_OID
+                // [6] IMPLICIT IA5String (uniformResourceIdentifier), context-specific primitive.
+                val isUri = nameTlv.tag == 0x86
+                if (isCaIssuers && isUri) {
+                    return String(nameTlv.content, Charsets.US_ASCII)
+                }
+            }
+            offset = accessDescription.nextOffset
+        }
+        return null
+    }
+
+    private data class DerTlv(val tag: Int, val content: ByteArray, val nextOffset: Int)
+
+    private fun readDerTlv(data: ByteArray, offset: Int): DerTlv? {
+        if (offset + 1 >= data.size) return null
+        val tag = data[offset].toInt() and 0xFF
+        val firstLenByte = data[offset + 1].toInt() and 0xFF
+        val contentStart: Int
+        val length: Int
+        if (firstLenByte and 0x80 == 0) {
+            length = firstLenByte
+            contentStart = offset + 2
+        } else {
+            val numLenBytes = firstLenByte and 0x7F
+            if (offset + 2 + numLenBytes > data.size) return null
+            var len = 0
+            for (i in 0 until numLenBytes) {
+                len = (len shl 8) or (data[offset + 2 + i].toInt() and 0xFF)
+            }
+            length = len
+            contentStart = offset + 2 + numLenBytes
+        }
+        if (contentStart + length > data.size) return null
+        return DerTlv(tag, data.copyOfRange(contentStart, contentStart + length), contentStart + length)
+    }
+
+    private fun decodeOid(bytes: ByteArray): String {
+        val parts = mutableListOf<Long>()
+        var value = 0L
+        for (b in bytes) {
+            val byteVal = b.toInt() and 0xFF
+            value = (value shl 7) or (byteVal and 0x7F).toLong()
+            if (byteVal and 0x80 == 0) {
+                parts.add(value)
+                value = 0
+            }
+        }
+        if (parts.isEmpty()) return ""
+        val first = parts[0]
+        val x = if (first < 40) 0L else if (first < 80) 1L else 2L
+        val rest = parts.drop(1)
+        return (listOf(x, first - x * 40) + rest).joinToString(".")
     }
 
     private fun parsePrivateKey(pem: ByteArray): java.security.PrivateKey {

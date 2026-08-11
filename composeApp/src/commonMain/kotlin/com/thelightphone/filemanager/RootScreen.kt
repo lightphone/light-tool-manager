@@ -49,7 +49,7 @@ fun RootScreen(
     fun load() {
         coroutineScope.launch {
             isLoading = true
-            val path = spec?.path?.joinToString("/") ?: "."
+            val path = spec?.path ?: "."
             runCatching { client.get("${getBaseUrl()}/api/tree/$path").body<List<DataViewSpec>>() }
                 .onSuccess { pages = it }
                 .onFailure {
@@ -147,8 +147,8 @@ fun RootScreenNestedPagePreview() {
         RootScreenContent(
             isLoading = false,
             pages = listOf(
-                FileBrowserSpec("Vacation Photos", listOf("second", "photos")),
-                FileBrowserSpec("Documents", listOf("second", "docs")),
+                FileBrowserSpec("Vacation Photos", "second/photos"),
+                FileBrowserSpec("Documents", "second/docs"),
             ),
             onPageClick = {},
         )

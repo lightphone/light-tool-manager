@@ -102,7 +102,7 @@ fun EntriesScreen(
     spec: FileBrowserSpec,
     onAlert: (FileManagerAlert) -> Unit = ::pushGlobalAlert
 ) {
-    val rootPath = remember(spec) { spec.asPathString }
+    val rootPath = remember(spec) { spec.path }
     var currentPath by remember(spec) { mutableStateOf(rootPath) }
     var allEntries by remember(currentPath) { mutableStateOf<List<Entry>>(emptyList()) }
     var isLoading by remember(currentPath) { mutableStateOf(true) }
@@ -829,11 +829,11 @@ fun EntriesScreenContentPreview() {
         }
     }
     val showDeleteConfirmation = remember { mutableStateOf(false) }
-    val spec = FileBrowserSpec("Files", listOf("files"), "Sample text options.")
+    val spec = FileBrowserSpec("Files", "files", "Sample text options.")
     AppTheme {
         EntriesScreenContent(
             spec = spec,
-            currentPath = spec.asPathString,
+            currentPath = spec.path,
             entries = entries,
             sort = sort,
             isLoading = false,
@@ -860,11 +860,11 @@ fun EntriesScreenContentPreview() {
 @Preview(device = Devices.DESKTOP)
 @Composable
 fun EntriesScreenContentLoadingPreview() {
-    val spec = FileBrowserSpec("Files", listOf("files"), "Sample text options.")
+    val spec = FileBrowserSpec("Files", "files", "Sample text options.")
     AppTheme {
         EntriesScreenContent(
             spec = spec,
-            currentPath = spec.asPathString,
+            currentPath = spec.path,
             sort = Sort(),
             entries = emptyList(),
             isLoading = true,

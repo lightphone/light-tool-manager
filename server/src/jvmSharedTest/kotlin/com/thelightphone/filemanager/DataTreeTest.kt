@@ -1,26 +1,44 @@
 package com.thelightphone.filemanager
 
+import com.thelightphone.filemanager.datatree.FileDataTree
+import com.thelightphone.filemanager.datatree.RootDataTree
+import com.thelightphone.filemanager.datatree.StaticBranchProvider
+import com.thelightphone.filemanager.datatree.WriteCheck
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.test.*
 
-class FileTreeTest {
+class DataTreeTest {
 
     private lateinit var tempDir: File
 
-    private fun createProvider(): FileFileTree =
-        FileFileTree(root = tempDir, defaultThumbnails = emptyMap())
+    private fun createProvider(): FileDataTree =
+        FileDataTree(
+            root = tempDir,
+            defaultThumbnails = emptyMap()
+        )
 
-    private fun createProvider(readRoots: List<File>, writeRoot: File): FileFileTree =
-        FileFileTree(readRoots = readRoots, writeRoot = writeRoot, defaultThumbnails = emptyMap())
+    private fun createProvider(readRoots: List<File>, writeRoot: File): FileDataTree =
+        FileDataTree(
+            readRoots = readRoots,
+            writeRoot = writeRoot,
+            defaultThumbnails = emptyMap()
+        )
 
-    private fun createRootProvider(vararg named: Pair<String, FileFileTree>): RootFileTree {
+    private fun createRootProvider(vararg named: Pair<String, FileDataTree>): RootDataTree {
         val children = named.map { (name, provider) ->
-            DataView(FileBrowserSpec(label = name, path = listOf(name)), provider)
+            LeafView(FileBrowserSpec(label = name, path = name), provider)
         }
-        return RootFileTree { DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(children)) }
+        return RootDataTree {
+            BranchView(
+                RootViewSpec("root", ""),
+                StaticBranchProvider(
+                    children
+                )
+            )
+        }
             .also { runBlocking { it.refreshProviders() } }
     }
 
@@ -181,8 +199,14 @@ class FileTreeTest {
         File(dir2, "readme.md").writeText("docs")
 
         val root = createRootProvider(
-            "photos" to FileFileTree(dir1, emptyMap()),
-            "docs" to FileFileTree(dir2, emptyMap())
+            "photos" to FileDataTree(
+                dir1,
+                emptyMap()
+            ),
+            "docs" to FileDataTree(
+                dir2,
+                emptyMap()
+            )
         )
 
         val photosResult = root.getDirectoryForPath(Path.of("photos/."), PageRequest())
@@ -199,21 +223,32 @@ class FileTreeTest {
         val dir = File(tempDir, "photos").apply { mkdir() }
         File(dir, "a.jpg").writeText("photo")
 
-        val leafView = DataView(FileBrowserSpec("photos", listOf("photos")), FileFileTree(dir, emptyMap()))
-        val nestedRoot = DataView(RootViewSpec("Deeper", listOf("second")), StaticBranchProvider(listOf(leafView)))
-        val root = RootFileTree {
-            DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(listOf(nestedRoot)))
+        val leafView = LeafView(FileBrowserSpec("photos", "photos"),
+            FileDataTree(dir, emptyMap())
+        )
+        val nestedRoot = BranchView(RootViewSpec("Deeper", "second"),
+            StaticBranchProvider(
+                listOf(leafView)
+            )
+        )
+        val root = RootDataTree {
+            BranchView(
+                RootViewSpec("root", ""),
+                StaticBranchProvider(
+                    listOf(nestedRoot)
+                )
+            )
         }.also { it.refreshProviders() }
 
         val topChildren = root.getChildrenAt(Path.of(".")).getOrThrow()
         val nestedSpec = topChildren.single() as RootViewSpec
-        assertEquals(listOf("second"), nestedSpec.path)
+        assertEquals("second", nestedSpec.path)
 
         val nestedChildren = root.getChildrenAt(Path.of("second")).getOrThrow()
         val nestedPhotosPath = nestedChildren.single().path
-        assertEquals(listOf("second", "photos"), nestedPhotosPath)
+        assertEquals("second/photos", nestedPhotosPath)
 
-        val result = root.getDirectoryForPath(Path.of(nestedPhotosPath.joinToString("/")), PageRequest())
+        val result = root.getDirectoryForPath(Path.of(nestedPhotosPath), PageRequest())
         assertTrue(result.isSuccess)
         assertEquals(1, result.getOrThrow().pagination.totalItems)
         assertEquals("a.jpg", result.getOrThrow().data[0].title)
@@ -221,9 +256,16 @@ class FileTreeTest {
 
     @Test
     fun `root provider fails for a path pointing at a RootView itself`() = runBlocking {
-        val nestedRoot = DataView(RootViewSpec("Deeper", listOf("second")), StaticBranchProvider(emptyList()))
-        val root = RootFileTree {
-            DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(listOf(nestedRoot)))
+        val nestedRoot = BranchView(RootViewSpec("Deeper", "second"),
+            StaticBranchProvider(emptyList())
+        )
+        val root = RootDataTree {
+            BranchView(
+                RootViewSpec("root", ""),
+                StaticBranchProvider(
+                    listOf(nestedRoot)
+                )
+            )
         }.also { it.refreshProviders() }
 
         val result = root.getDirectoryForPath(Path.of("second"), PageRequest())
@@ -237,7 +279,11 @@ class FileTreeTest {
         val dir = File(tempDir, "files").apply { mkdir() }
         File(dir, "test.txt").writeText("content here")
 
-        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
+        val root = createRootProvider("files" to FileDataTree(
+            dir,
+            emptyMap()
+        )
+        )
 
         val result = root.getBytes(Path.of("files/test.txt"))
         assertEquals("content here", result.getOrThrow().bufferedReader().readText())
@@ -257,8 +303,14 @@ class FileTreeTest {
     fun `root provider lists roots`() = runBlocking {
         val dir = File(tempDir, "a").apply { mkdir() }
         val root = createRootProvider(
-            "alpha" to FileFileTree(dir, emptyMap()),
-            "beta" to FileFileTree(dir, emptyMap())
+            "alpha" to FileDataTree(
+                dir,
+                emptyMap()
+            ),
+            "beta" to FileDataTree(
+                dir,
+                emptyMap()
+            )
         )
 
         val roots = root.getChildrenAt(Path.of(".")).getOrThrow()
@@ -271,9 +323,21 @@ class FileTreeTest {
         File(dir, "file1.txt").writeText("v1")
 
         var children = listOf(
-            DataView(FileBrowserSpec("src", listOf("src")), FileFileTree(dir, emptyMap()))
+            LeafView(FileBrowserSpec("src", "src"),
+                FileDataTree(
+                    dir,
+                    emptyMap()
+                )
+            )
         )
-        val root = RootFileTree { DataView(RootViewSpec("root", emptyList()), StaticBranchProvider(children)) }
+        val root = RootDataTree {
+            BranchView(
+                RootViewSpec("root", ""),
+                StaticBranchProvider(
+                    children
+                )
+            )
+        }
         root.refreshProviders()
 
         println(root.getDirectoryForPath(Path.of("src/."), PageRequest()))
@@ -282,7 +346,9 @@ class FileTreeTest {
         // Simulate adding a new provider
         val dir2 = File(tempDir, "extra").apply { mkdir() }
         File(dir2, "new.txt").writeText("new")
-        children = children + DataView(FileBrowserSpec("extra", listOf("extra")), FileFileTree(dir2, emptyMap()))
+        children = children + LeafView(FileBrowserSpec("extra", "extra"),
+            FileDataTree(dir2, emptyMap())
+        )
 
         // Without invalidation, new root is unknown
         assertTrue(root.getDirectoryForPath(Path.of("extra/."), PageRequest()).isFailure)
@@ -440,7 +506,11 @@ class FileTreeTest {
         val dir = File(tempDir, "files").apply { mkdir() }
         File(dir, "existing.txt").writeText("data")
 
-        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
+        val root = createRootProvider("files" to FileDataTree(
+            dir,
+            emptyMap()
+        )
+        )
 
         assertIs<WriteCheck.Safe>(root.checkWrite(Path.of("files/newfile.txt")))
         assertIs<WriteCheck.FileExists>(root.checkWrite(Path.of("files/existing.txt")))
@@ -451,7 +521,11 @@ class FileTreeTest {
     @Test
     fun `root provider writeBytes routes correctly`() = runBlocking {
         val dir = File(tempDir, "files").apply { mkdir() }
-        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
+        val root = createRootProvider("files" to FileDataTree(
+            dir,
+            emptyMap()
+        )
+        )
 
         val result = root.writeBytes(Path.of("files/test.txt")) { out ->
             out.write("via root".toByteArray())
@@ -597,7 +671,11 @@ class FileTreeTest {
         val dir = File(tempDir, "files").apply { mkdir() }
         File(dir, "target.txt").writeText("delete me")
 
-        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
+        val root = createRootProvider("files" to FileDataTree(
+            dir,
+            emptyMap()
+        )
+        )
 
         val result = root.delete(Path.of("files/target.txt"))
         assertTrue(result.isSuccess)
@@ -610,7 +688,11 @@ class FileTreeTest {
         val dir = File(tempDir, "files").apply { mkdir() }
         File(dir, "old.txt").writeText("rename me")
 
-        val root = createRootProvider("files" to FileFileTree(dir, emptyMap()))
+        val root = createRootProvider("files" to FileDataTree(
+            dir,
+            emptyMap()
+        )
+        )
 
         val result = root.rename(Path.of("files/old.txt"), "new.txt")
         assertTrue(result.isSuccess)

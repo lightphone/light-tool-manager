@@ -4,8 +4,13 @@ import android.content.ContentResolver
 import android.content.ContentValues
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.thelightphone.filemanager.datatree.CachingDataTree
+import com.thelightphone.filemanager.datatree.WriteCheck
+import com.thelightphone.filemanager.datatree.WriteTarget
+import com.thelightphone.filemanager.datatree.entryTypeForName
 import java.io.InputStream
 import java.nio.file.Path
+import java.nio.file.Paths
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -16,14 +21,14 @@ import kotlin.time.Instant
 
 // NOT YET TESTED!!
 // Will be used to route requests to third-party tools which use the fileShare
-class ContentResolverFileTree(
+class ContentResolverDataTree(
     private val contentResolver: ContentResolver,
     private val authority: String,
     readOnly: Boolean = false,
     showHiddenFiles: Boolean = false,
     cacheTtl: Duration = 5.minutes,
     timeNow: () -> Instant = { Clock.System.now() }
-) : CachingFileTree(readOnly, showHiddenFiles, cacheTtl, timeNow) {
+) : CachingDataTree(readOnly, showHiddenFiles, cacheTtl, timeNow) {
 
     private fun pathToUri(path: Path): Uri {
         val pathStr = path.normalize().toString()
@@ -105,7 +110,9 @@ class ContentResolverFileTree(
 
         // path doesn't exist
         if (cursor == null) {
-            val parentPath = filePath.parent ?: Path.of(".")
+            // Path.of(String) needs API 34 on Android (Paths.get is the same thing, available
+            // since java.nio.file itself landed at API 26).
+            val parentPath = filePath.parent ?: Paths.get(".")
             val parentCursor = try {
                 contentResolver.query(pathToUri(parentPath), arrayOf(COLUMN_IS_DIRECTORY), null, null, null)
             } catch (_: Exception) {

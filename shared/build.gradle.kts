@@ -11,7 +11,7 @@ android {
     namespace = "com.thelightphone.filemanager.shared"
     compileSdk = 36
     defaultConfig {
-        minSdk = 24
+        minSdk = 26
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

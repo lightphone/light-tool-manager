@@ -8,6 +8,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import androidx.annotation.RequiresPermission
+import com.thelightphone.filemanager.datatree.RootDataTree
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.sslConnector
@@ -21,12 +22,13 @@ import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 class FileManagerServiceAndroid(
-    private val rootDataProvider: RootFileTree,
+    private val rootDataProvider: RootDataTree,
     private val context: Context,
     private val logger: Logger,
     private val port: Int = HTTPS_PORT,
     private val enableLogging: Boolean = false,
     private val onNetworkLost: (() -> Unit)? = null,
+    private val provideNewAuth: () -> FileManagerAuth? = { null }
 ) {
 
     companion object {
@@ -37,7 +39,7 @@ class FileManagerServiceAndroid(
         null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
-    var apiKey: String? = null
+    var auth: FileManagerAuth? = null
         private set
 
     val isRunning: Boolean get() = server != null
@@ -53,14 +55,16 @@ class FileManagerServiceAndroid(
 
         CoroutineScope(Dispatchers.IO).launch { rootDataProvider.refreshProviders() }
 
-        val key = generateApiKey()
-        apiKey = key
+        auth = provideNewAuth()
         val sslConfig = SslConfig(logger)
         val keyStore = sslConfig.loadKeyStore(File(context.filesDir, "certs"))
         // not important since we're using local-ip.co's certs which are public
-        val keyStorePassword = "changeit"
+        val keyStorePassword = "whatever"
 
         val engine = embeddedServer(Netty, configure = {
+            // ALPN negotiation (needed for HTTP/2) goes through Netty's JdkAlpnSslEngine, which
+            // isn't fully compatible with Android's SSLEngine implementation. fine for this app
+            enableHttp2 = false
             sslConnector(
                 keyStore = keyStore,
                 keyAlias = "server",
@@ -74,7 +78,7 @@ class FileManagerServiceAndroid(
             module(
                 rootDataProvider,
                 enableLogging = enableLogging,
-                apiKey = key,
+                auth = auth,
                 fileManagerLogger = logger
             )
         }.start(wait = false)
@@ -88,16 +92,16 @@ class FileManagerServiceAndroid(
         unregisterNetworkMonitor()
         val s = server
         server = null
-        apiKey = null
+        auth = null
         CoroutineScope(Dispatchers.IO).launch {
             s?.stop(1, 5, TimeUnit.SECONDS)
         }
     }
 
-    fun getHttpsUrl(): String? {
-        val key = apiKey ?: return null
+    fun getHttpsUrl(hostOverride: InetAddress? = null): String? {
+        val key = auth?.primaryKey ?: return null
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val address = getWifiAddress(wifi)
+        val address = hostOverride ?: getWifiAddress(wifi)
         if (address.hostAddress == "0.0.0.0") return null
         val domain = address.hostAddress!!.replace('.', '-') + ".my.local-ip.co"
         return "https://$domain:$port/#$key"

@@ -2,15 +2,20 @@ package com.thelightphone.filemanager
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
 import android.media.ThumbnailUtils
+import android.os.Build
+import android.provider.MediaStore
 import android.util.LruCache
 import android.util.Size
 import com.thelightphone.filemanager.EntryType.*
+import com.thelightphone.filemanager.datatree.FileDataTree
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Path
@@ -19,7 +24,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
 
-class ThumbnailFileTree(
+class ThumbnailDataTree(
     private val root: File,
     private val context: Context,
     private val logger: Logger,
@@ -27,7 +32,7 @@ class ThumbnailFileTree(
     readOnly: Boolean = false,
     maxCacheSizeBytes: Int = 16 * 1024 * 1024,
     private val thumbnailSizePx: Int = 512
-) : FileFileTree(root, defaultThumbnails, readOnly = readOnly) {
+) : FileDataTree(root, defaultThumbnails, readOnly = readOnly) {
     private val uploadedFiles = mutableSetOf<Path>()
 
     private val cache = object : LruCache<String, ByteArray>(maxCacheSizeBytes) {
@@ -54,15 +59,29 @@ class ThumbnailFileTree(
         }
     }
 
+    // The File+Size+CancellationSignal overload needs API 29; minSdk here is 26. Unlike video,
+    // ThumbnailUtils.createImageThumbnail has no legacy String-path overload at all — the whole
+    // method was new in API 29 — so 26-28 decodes the file manually and downsamples it instead.
     override fun getImageThumbnail(filePath: Path): Result<InputStream>? {
         return cachedThumbnail(filePath) { file ->
-            ThumbnailUtils.createImageThumbnail(file, Size(thumbnailSizePx, thumbnailSizePx), null)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ThumbnailUtils.createImageThumbnail(file, Size(thumbnailSizePx, thumbnailSizePx), null)
+            } else {
+                val bitmap = BitmapFactory.decodeFile(file.path)
+                    ?: throw IOException("Failed to decode image: ${file.path}")
+                ThumbnailUtils.extractThumbnail(bitmap, thumbnailSizePx, thumbnailSizePx)
+            }
         }
     }
 
     override fun getVideoThumbnail(filePath: Path): Result<InputStream>? {
         return cachedThumbnail(filePath) { file ->
-            ThumbnailUtils.createVideoThumbnail(file, Size(thumbnailSizePx, thumbnailSizePx), null)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ThumbnailUtils.createVideoThumbnail(file, Size(thumbnailSizePx, thumbnailSizePx), null)
+            } else {
+                @Suppress("DEPRECATION")
+                ThumbnailUtils.createVideoThumbnail(file.path, MediaStore.Video.Thumbnails.MINI_KIND)!!
+            }
         }
     }
 

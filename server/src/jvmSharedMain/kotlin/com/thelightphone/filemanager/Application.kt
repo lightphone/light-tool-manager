@@ -1,5 +1,8 @@
 package com.thelightphone.filemanager
 
+import com.thelightphone.filemanager.datatree.LeafDataTree
+import com.thelightphone.filemanager.datatree.RootDataTree
+import com.thelightphone.filemanager.datatree.WriteCheck
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -42,19 +45,20 @@ data class DeleteResponse(val deleted: Int)
 @Serializable
 data class RenameResponse(val renamed: Boolean)
 
-fun generateApiKey(): String {
-    val bytes = ByteArray(32)
-    java.security.SecureRandom().nextBytes(bytes)
-    return bytes.joinToString("") { "%02x".format(it) }
-}
+@Serializable
+data class PairRequest(val code: String)
+
+@Serializable
+data class PairResponse(val key: String)
 
 private const val TAG = "FileManagerServer"
+private const val PairPath = "/api/pair"
 
 fun Application.module(
-    rootDataProvider: RootFileTree,
+    rootDataProvider: RootDataTree,
     enableLogging: Boolean,
     fileManagerLogger: Logger,
-    apiKey: String? = null
+    auth: FileManagerAuth? = null
 ) {
 
     install(ContentNegotiation) {
@@ -106,13 +110,17 @@ fun Application.module(
     }
 
 
-    if (apiKey != null) {
+    if (auth != null) {
         intercept(ApplicationCallPipeline.Plugins) {
             val path = call.request.path()
-            if (path.startsWith("/api/")) {
-                val auth = call.request.header(HttpHeaders.Authorization)
+            // /api/pair is deliberately excluded: a device pairing via a 6-digit code has no key
+            // yet, so it has to be reachable without one.
+            if (path.startsWith("/api/") && path != PairPath) {
+                val headerKey = call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer ")
                 val queryKey = call.request.queryParameters["key"]
-                if (auth != "Bearer $apiKey" && queryKey != apiKey) {
+                val validHeader = headerKey != null && auth.validateKey(headerKey)
+                val validQuery = queryKey != null && auth.validateKey(queryKey)
+                if (!validHeader && !validQuery) {
                     call.respond(HttpStatusCode.Unauthorized)
                     finish()
                     return@intercept
@@ -134,11 +142,39 @@ fun Application.module(
             call.respond(HttpStatusCode.OK)
         }
 
+        if (auth != null) {
+            post(PairPath) {
+                val pairRequest = call.receive<PairRequest>()
+                val newKey = auth.mintKey(pairRequest.code)
+                if (newKey != null) {
+                    call.respond(HttpStatusCode.OK, PairResponse(newKey))
+                } else {
+                    call.respond(
+                        HttpStatusCode.Unauthorized,
+                        ErrorResponse("INVALID_CODE", "Invalid or expired code")
+                    )
+                }
+            }
+        }
+
+        // No-op past the auth interceptor above (which already applies to every /api/* path
+        // except /api/pair): just reaching this with a 200 back is the validation. Lets a client
+        // check whether a stored key still works — e.g. after a restart minted a new primaryKey
+        // and dropped anything minted via /api/pair — without a full API call that could fail for
+        // unrelated reasons.
+        get("/api/validate") {
+            call.respond(HttpStatusCode.OK)
+        }
+
         // Returns the immediate children (one level) of the page at this path; empty path
         // ("." by the same convention as every other route below) means the top-level pages.
+        // showHidden=true opts out of the default filtering, surfacing DataViews with
+        // isHidden = true — meant for API-only callers, not the app's own navigation, which is
+        // why it isn't the default.
         get("/api/tree/{path...}") {
             val filePath = call.parameters.getAll("path")?.joinToString("/") ?: "."
-            rootDataProvider.getChildrenAt(Path.of(filePath)).fold(
+            val showHidden = call.request.queryParameters["showHidden"] == "true"
+            rootDataProvider.getChildrenAt(Path.of(filePath), showHidden = showHidden).fold(
                 onSuccess = { call.respond(HttpStatusCode.OK, it) },
                 onFailure = { call.respondError(it) }
             )
@@ -198,6 +234,28 @@ fun Application.module(
                         HttpHeaders.ContentDisposition,
                         "attachment; filename=\"$filename\""
                     )
+                    call.respondOutputStream(contentType = ContentType.Application.OctetStream) {
+                        inputStream.use { it.transferTo(this) }
+                    }
+                },
+                onFailure = { call.respondError(it) }
+            )
+        }
+
+        // Like /api/download/{path...}, but serves the bytes inline (no Content-Disposition
+        // header) instead of prompting a file download.
+        get("/api/data/{path...}") {
+            val filePath = call.parameters.getAll("path")?.joinToString("/")
+            if (filePath == null) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse("MISSING_PATH", "Missing path")
+                )
+                return@get
+            }
+
+            rootDataProvider.getBytes(Path.of(filePath)).fold(
+                onSuccess = { inputStream ->
                     call.respondOutputStream(contentType = ContentType.Application.OctetStream) {
                         inputStream.use { it.transferTo(this) }
                     }
@@ -376,6 +434,7 @@ private suspend fun ApplicationCall.respondError(error: Throwable) {
         is NoSuchElementException -> HttpStatusCode.NotFound to "NOT_FOUND"
         is SecurityException -> HttpStatusCode.Forbidden to "FORBIDDEN"
         is IllegalArgumentException -> HttpStatusCode.BadRequest to "BAD_REQUEST"
+        is UnsupportedOperationException -> HttpStatusCode.NotImplemented to "NOT_SUPPORTED"
         else -> HttpStatusCode.InternalServerError to "INTERNAL_ERROR"
     }
     respond(status, ErrorResponse(code, error.message ?: "Unknown error"))
@@ -384,7 +443,7 @@ private suspend fun ApplicationCall.respondError(error: Throwable) {
 private suspend fun streamFilesToZip(
     output: ByteWriteChannel,
     paths: List<String>,
-    dataProvider: LeafFileTree,
+    dataProvider: LeafDataTree,
     fileManagerLogger: Logger
 ) {
     val zipBuffer = ByteArrayOutputStream(32768)

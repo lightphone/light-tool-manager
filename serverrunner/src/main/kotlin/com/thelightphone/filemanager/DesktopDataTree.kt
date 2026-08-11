@@ -1,12 +1,13 @@
 package com.thelightphone.filemanager
 
+import com.thelightphone.filemanager.datatree.FileDataTree
 import java.io.File
 
-class DesktopFileTree(
+class DesktopDataTree(
     readRoots: List<File>,
     writeRoot: File,
     defaultThumbnails: Map<EntryType, File> = emptyMap(),
-) : FileFileTree(readRoots, writeRoot, defaultThumbnails) {
+) : FileDataTree(readRoots, writeRoot, defaultThumbnails) {
     constructor(readRoot: File, defaultThumbnails: Map<EntryType, File> = emptyMap()) : this(
         listOf(readRoot), readRoot, defaultThumbnails
     )

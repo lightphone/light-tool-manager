@@ -52,7 +52,7 @@ fun DropBoxScreen(
     spec: DropboxSpec,
     onAlert: (FileManagerAlert) -> Unit = ::pushGlobalAlert
 ) {
-    val rootPath = remember(spec) { spec.asPathString }
+    val rootPath = remember(spec) { spec.path }
     var currentPath by remember(spec) { mutableStateOf(rootPath) }
     var isUploading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
@@ -82,7 +82,7 @@ fun DropBoxScreenPreview() {
     AppTheme {
         val spec = DropboxSpec(
             "DropBox",
-            emptyList(),
+            "",
             headerText = "Sample thing\nTry this.",
             buttonText = "Click Here to Upload"
         )
