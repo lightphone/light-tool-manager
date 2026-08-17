@@ -14,7 +14,7 @@ plugins {
 }
 
 allprojects {
-    group = "com.thelightphone.filemanager"
+    group = "com.thelightphone.toolmanager"
     version = "0.0.6-dirty"
 
     val localProperties = Properties().apply {

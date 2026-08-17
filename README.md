@@ -1,4 +1,4 @@
-# File Manager
+# Tool Manager
 
 A Kotlin Multiplatform file browser with a Compose Multiplatform web frontend and a Ktor server backend. The server can be embedded in an Android app with mDNS discovery, allowing files on the device to be browsed, uploaded, downloaded, renamed, and deleted from any browser on the local network.
 
@@ -6,7 +6,7 @@ A Kotlin Multiplatform file browser with a Compose Multiplatform web frontend an
 
 - **[shared](./shared)** - Common data models (`Entry`, `DirectoryMeta`, `DownloadRequest`, etc.) shared across all modules.
 - **[server](./server)** - Ktor server module with the `DataProvider` abstraction, `RootDataProvider` routing, `FileDataProvider` for filesystem access, and HTTP API routes. Targets JVM and Android.
-  - **Android extras** - `ThumbnailDataProvider` (image/video thumbnail generation with LRU cache), `FileManagerServiceAndroid` (embedded server wrapper with JmDNS/mDNS registration).
+  - **Android extras** - `ThumbnailDataProvider` (image/video thumbnail generation with LRU cache), `ToolManagerServiceAndroid` (embedded server wrapper with JmDNS/mDNS registration).
 - **[composeApp](./composeApp)** - Compose Multiplatform web frontend (JS target). Provides a file browsing UI with directory navigation, image/video thumbnail previews, multi-select download (ZIP), and file upload.
   - Note: there is an active Android build, but only to enable Compose previews in Android Studio. Most functionality is stubbed out. Don't use.
 - **[serverrunner](./serverrunner)** - Standalone JVM entry point for running the server locally with sample directories.
@@ -32,7 +32,7 @@ To publish the server module (with bundled frontend) to mavenLocal:
 ```
 
 ## API Endpoints
-(implemented in [Application.kt](server/src/jvmSharedMain/kotlin/com/thelightphone/filemanager/Application.kt)
+(implemented in [Application.kt](server/src/jvmSharedMain/kotlin/com/thelightphone/toolmanager/Application.kt)
 | Method | Path                        | Description                                    |
 |--------|-----------------------------|------------------------------------------------|
 | GET    | `/api/ping`                 | Health check                                   |

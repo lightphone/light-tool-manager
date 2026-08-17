@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.thelightphone.filemanager.server"
+    namespace = "com.thelightphone.toolmanager.server"
     compileSdk = 36
     defaultConfig {
         minSdk = 26

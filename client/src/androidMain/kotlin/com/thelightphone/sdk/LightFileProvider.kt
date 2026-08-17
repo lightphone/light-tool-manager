@@ -10,13 +10,13 @@ import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
-import com.thelightphone.filemanager.COLUMN_IS_DIRECTORY
-import com.thelightphone.filemanager.COLUMN_LAST_MODIFIED
+import com.thelightphone.toolmanager.COLUMN_IS_DIRECTORY
+import com.thelightphone.toolmanager.COLUMN_LAST_MODIFIED
 import java.io.File
 import java.nio.file.Files
 
 /**
- * Exposes this app's `<filesDir>/shared` directory to the PhotoBrowser server's
+ * Exposes this app's `<filesDir>/shared` directory to the ToolManager server's
  * `ContentResolverFileTree`, which this mirrors column-for-column and call-for-call.
  *
  * To use this, declare it in the consuming app's own manifest with a unique authority (this
@@ -36,7 +36,7 @@ class LightFileProvider : ContentProvider() {
         const val SHARED_DIR = "shared"
     }
 
-    // Only the PhotoBrowser server (a system app) may call this — it exposes another app's
+    // Only the Tool Manager server (a system app) may call this — it exposes another app's
     // private storage, so this is load-bearing access control, not a convenience check.
     private fun checkCaller() {
         if (Binder.getCallingUid() != Process.SYSTEM_UID) {

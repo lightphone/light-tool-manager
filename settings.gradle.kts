@@ -1,4 +1,4 @@
-rootProject.name = "PhotoBrowser"
+rootProject.name = "LightToolManager"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 pluginManagement {
