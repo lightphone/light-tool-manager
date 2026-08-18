@@ -1,14 +1,19 @@
 package com.thelightphone.filemanager
 
+import coil3.PlatformContext
+import coil3.request.ImageRequest
 import com.thelightphone.toolmanager.DataViewSpec
 import com.thelightphone.toolmanager.DirectoryMeta
 import com.thelightphone.toolmanager.DownloadRequest
 import com.thelightphone.toolmanager.DownloadTokenResponse
 import com.thelightphone.toolmanager.Entry
 import com.thelightphone.toolmanager.PaginatedResponse
+import com.thelightphone.toolmanager.PaginationInfo
 import com.thelightphone.toolmanager.SortBy
 import com.thelightphone.toolmanager.SortOrder
 import com.thelightphone.toolmanager.getBaseUrl
+import com.thelightphone.toolmanager.platformUploadOctetStream
+import com.thelightphone.toolmanager.triggerDownload
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.timeout
@@ -38,6 +43,9 @@ interface Remote {
     suspend fun notifyUpload(path: String): Result<Unit>
     suspend fun deleteFile(path: String): Result<Boolean>
     suspend fun uploadBytes(url: String, bytes: ByteArray, timeoutMillis: Long): HttpStatusCode
+    suspend fun uploadOctetStream(path: String, fileName: String, bytes: ByteArray, timeoutMillis: Long): HttpStatusCode
+    fun downloadFile(token: String, apiKey: String? = null)
+    fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest
 }
 
 @JvmInline
@@ -99,4 +107,72 @@ value class HttpRemote(private val client: HttpClient) : Remote {
         }
         return response.status
     }
+
+    override fun downloadFile(token: String, apiKey: String?) {
+        val keyParam = apiKey?.let { "?key=$it" } ?: ""
+        triggerDownload("${getBaseUrl()}/api/download-zip/$token$keyParam")
+    }
+
+    override suspend fun uploadOctetStream(
+        path: String,
+        fileName: String,
+        bytes: ByteArray,
+        timeoutMillis: Long
+    ): HttpStatusCode = platformUploadOctetStream(this, "${getBaseUrl()}/api/upload/$path/$fileName", bytes, timeoutMillis)
+
+    override fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest =
+        ImageRequest.Builder(context)
+            .data("${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}")
+            .build()
+}
+
+// No-op Remote for @Preview composables, which have no server to talk to.
+object PreviewRemote : Remote {
+    override suspend fun ping(): Result<Boolean> = Result.success(true)
+
+    override suspend fun treeAt(path: String): Result<List<DataViewSpec>> = Result.success(emptyList())
+
+    override suspend fun filesAt(
+        path: String,
+        page: Int,
+        size: Int,
+        sortBy: SortBy,
+        sortOrder: SortOrder
+    ): Result<PaginatedResponse<Entry>> = Result.success(
+        PaginatedResponse(
+            data = emptyList(),
+            pagination = PaginationInfo(
+                currentPage = page,
+                totalPages = 1,
+                pageSize = size,
+                totalItems = 0,
+                hasNext = false,
+                hasPrevious = false
+            )
+        )
+    )
+
+    override suspend fun metaAt(path: String): Result<DirectoryMeta> = Result.success(DirectoryMeta(readOnly = false))
+
+    override suspend fun requestDownloadToken(paths: List<String>): Result<DownloadTokenResponse> =
+        Result.success(DownloadTokenResponse(token = "preview-token", expiresAt = ""))
+
+    override suspend fun notifyUpload(path: String): Result<Unit> = Result.success(Unit)
+
+    override suspend fun deleteFile(path: String): Result<Boolean> = Result.success(true)
+
+    override suspend fun uploadBytes(url: String, bytes: ByteArray, timeoutMillis: Long): HttpStatusCode =
+        HttpStatusCode.OK
+
+    override suspend fun uploadOctetStream(
+        path: String,
+        fileName: String,
+        bytes: ByteArray,
+        timeoutMillis: Long
+    ): HttpStatusCode = HttpStatusCode.OK
+
+    override fun downloadFile(token: String, apiKey: String?) {}
+
+    override fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest =
+        ImageRequest.Builder(context).build()
 }

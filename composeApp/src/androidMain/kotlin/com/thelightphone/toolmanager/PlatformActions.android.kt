@@ -21,7 +21,7 @@ actual fun triggerFilePicker(
 ) {}
 actual fun getApiKey(): String? = null
 
-actual suspend fun uploadOctetStream(
+actual suspend fun platformUploadOctetStream(
     remote: Remote,
     url: String,
     bytes: ByteArray,

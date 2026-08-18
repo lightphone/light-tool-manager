@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
@@ -46,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -58,7 +60,13 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.ColorImage
+import coil3.annotation.ExperimentalCoilApi
 import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePreviewHandler
+import coil3.compose.LocalAsyncImagePreviewHandler
+import coil3.compose.LocalPlatformContext
+import com.thelightphone.filemanager.PreviewRemote
 import com.thelightphone.filemanager.Remote
 import com.thelightphone.toolmanager.composeapp.generated.resources.Res
 import com.thelightphone.toolmanager.composeapp.generated.resources.ic_reverse_order_white
@@ -116,8 +124,9 @@ fun EntriesScreen(
             }
 
             try {
-                val response = remote.filesAt(currentPath, page, pageSize, sort.sortBy, sort.sortOrder)
-                    .getOrThrow()
+                val response =
+                    remote.filesAt(currentPath, page, pageSize, sort.sortBy, sort.sortOrder)
+                        .getOrThrow()
 
                 allEntries = if (append) {
                     allEntries + response.data
@@ -158,15 +167,9 @@ fun EntriesScreen(
 
     fun downloadSelected() {
         if (selectedPaths.isEmpty()) return
-        val keyParam = getApiKey()?.let { "?key=$it" } ?: ""
-        if (selectedPaths.size == 1) {
-            triggerDownload("${getBaseUrl()}/api/download/${selectedPaths.first()}$keyParam")
-            selectedPaths = emptySet()
-            return
-        }
         coroutineScope.launch {
             remote.requestDownloadToken(selectedPaths.toList()).onSuccess { tokenResponse ->
-                triggerDownload("${getBaseUrl()}/api/download-zip/${tokenResponse.token}$keyParam")
+                remote.downloadFile(tokenResponse.token, getApiKey())
                 selectedPaths = emptySet()
             }
         }
@@ -205,6 +208,7 @@ fun EntriesScreen(
     }
 
     EntriesScreenContent(
+        remote = remote,
         spec = spec,
         sort = sort,
         currentPath = currentPath,
@@ -242,6 +246,7 @@ fun EntriesScreen(
 
 @Composable
 private fun EntriesScreenContent(
+    remote: Remote,
     spec: FileBrowserSpec,
     currentPath: String,
     entries: List<Entry>,
@@ -324,6 +329,7 @@ private fun EntriesScreenContent(
 
                 else -> {
                     EntryList(
+                        remote = remote,
                         entries = entries,
                         gridState = gridState,
                         isLoadingMore = isLoadingMore,
@@ -484,9 +490,9 @@ suspend fun uploadFiles(
         // on light devices, worth testing though
         for ((fileName, bytes) in files) {
             runCatching {
-                val status = uploadOctetStream(
-                    remote,
-                    "${getBaseUrl()}/api/upload/$currentPath/$fileName",
+                val status = remote.uploadOctetStream(
+                    currentPath,
+                    fileName,
                     bytes,
                     5.minutes.inWholeMilliseconds,
                 )
@@ -554,6 +560,7 @@ suspend fun deleteFiles(
 
 @Composable
 fun EntryList(
+    remote: Remote,
     entries: List<Entry>,
     gridState: LazyGridState,
     isLoadingMore: Boolean,
@@ -565,11 +572,6 @@ fun EntryList(
     val gridItemSize = 180.dp
     val gridSpacing = 8.dp
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        // This is how GridCells.Adaptive maintains column count under the hood
-        val columnCount = remember(maxWidth) {
-            (((maxWidth + gridSpacing) / (gridItemSize + gridSpacing)).toInt()).coerceAtLeast(1)
-        }
-        val oddColumns = columnCount.and(1) == 1
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = gridItemSize),
             horizontalArrangement = Arrangement.spacedBy(gridSpacing),
@@ -581,20 +583,11 @@ fun EntryList(
                 scrollingHeader()
             }
             stickyHeader { header() }
-            fun variant(idx: Int): Boolean {
-                return if (oddColumns || columnCount == 0) {
-                    idx.and(1) == 1
-                } else {
-                    val col = idx / columnCount
-                    idx.and(1) != col.and(1)
-                }
-            }
             itemsIndexed(entries) { idx, item ->
                 EntryListItem(
+                    remote = remote,
                     entry = item,
                     isSelected = selectedPaths.contains(item.path),
-                    variant = variant(idx),
-                    gridItemSize = gridItemSize,
                     onClick = { onEntryClick(item, idx) }
                 )
             }
@@ -637,9 +630,9 @@ private fun formatLastModified(epochMillis: Long): String =
         .format(LastModifiedDateFormat)
 
 @Composable
-fun BoxScope.VideoListItem(entry: Entry) {
+fun BoxScope.VideoListItem(remote: Remote, entry: Entry) {
     AsyncImage(
-        model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
+        model = remote.thumbnailFetcherForEntry(entry, LocalPlatformContext.current),
         contentDescription = entry.title,
         modifier = Modifier.fillMaxSize(),
         contentScale = ContentScale.Crop
@@ -686,9 +679,9 @@ fun BoxScope.FileListItem(entry: Entry) {
 }
 
 @Composable
-fun ImageListItem(entry: Entry) {
+fun ImageListItem(remote: Remote, entry: Entry) {
     AsyncImage(
-        model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
+        model = remote.thumbnailFetcherForEntry(entry, LocalPlatformContext.current),
         contentDescription = entry.title,
         modifier = Modifier.fillMaxSize(),
         contentScale = ContentScale.Crop
@@ -697,14 +690,14 @@ fun ImageListItem(entry: Entry) {
 
 @Composable
 fun EntryListItem(
+    remote: Remote,
     entry: Entry,
-    variant: Boolean,
-    gridItemSize: Dp,
     isSelected: Boolean,
     onClick: (Entry) -> Unit
 ) {
-    val bgColor =
-        if (variant) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+    val bgColor = MaterialTheme.colorScheme.primary
+    val selectedOverlayColor = Color(0x88CCCCCC)
+    val selectedBorderColor = Color(0xFFF7E22E)
     Box(Modifier.aspectRatio(1f).background(bgColor).clickable {
         onClick(entry)
     }) {
@@ -712,61 +705,18 @@ fun EntryListItem(
             EntryType.Directory -> { /* Directories not supported currently */
             }
 
-            EntryType.Image -> ImageListItem(entry)
-            EntryType.Video -> VideoListItem(entry)
+            EntryType.Image -> ImageListItem(remote, entry)
+            EntryType.Video -> VideoListItem(remote, entry)
             EntryType.GenericFile, EntryType.Text, EntryType.Audio -> FileListItem(entry)
         }
         if (isSelected) {
-            Box(Modifier.fillMaxSize().border(5.dp, MaterialTheme.colorScheme.onBackground))
+            Box(
+                Modifier.fillMaxSize()
+                    .border(7.dp, selectedBorderColor)
+                    .background(selectedOverlayColor)
+            )
         }
     }
-//    Card(
-//        modifier = Modifier
-//            .fillMaxWidth()
-//            .padding(4.dp)
-//            .clickable { onClick(entry) },
-//        elevation = CardDefaults.cardElevation(
-//            defaultElevation = if (isSelected) 8.dp else 4.dp
-//        ),
-//        colors = CardDefaults.cardColors(
-//            containerColor = if (isSelected)
-//                MaterialTheme.colorScheme.primaryContainer
-//            else
-//                MaterialTheme.colorScheme.surface
-//        )
-//    ) {
-//        Column {
-//            if (entry.type == EntryType.Image || entry.type == EntryType.Video) {
-//                AsyncImage(
-//                    model = "${getBaseUrl()}/api/thumbnail/${entry.path}?type=${entry.type}",
-//                    contentDescription = entry.title,
-//                    modifier = Modifier
-//                        .fillMaxWidth()
-//                        .height(200.dp)
-//                        .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)),
-//                    contentScale = ContentScale.Crop
-//                )
-//            }
-//
-//            Column(
-//                modifier = Modifier.padding(16.dp)
-//            ) {
-//                Text(
-//                    entry.title,
-//                    style = MaterialTheme.typography.headlineSmall,
-//                    fontWeight = FontWeight.Bold
-//                )
-//
-//                Spacer(modifier = Modifier.height(4.dp))
-//
-//                Text(
-//                    entry.type.name,
-//                    style = MaterialTheme.typography.bodyMedium,
-//                    color = MaterialTheme.colorScheme.onSurfaceVariant
-//                )
-//            }
-//        }
-//    }
 }
 
 private data class Sort(
@@ -775,7 +725,6 @@ private data class Sort(
 )
 
 private val previewEntries = listOf(
-    Entry(EntryType.Directory, "vacation", "photos/vacation", 0L, 0L),
     Entry(EntryType.Image, "photo.jpg", "photos/photo.jpg", 0L, 1024L),
     Entry(EntryType.Audio, "song.mp3", "photos/song.mp3", 0L, 4096L),
     Entry(EntryType.Text, "notes_and_other_important_things.txt", "photos/notes.txt", 0L, 256L),
@@ -788,6 +737,20 @@ private val previewEntries = listOf(
         meta = mapOf(MetaKeys.DURATION to "12:34")
     ),
 )
+
+// Intercepts AsyncImage's thumbnail loads while a @Preview is rendering (LocalInspectionMode)
+// so the preview canvas shows solid placeholders instead of hitting the (nonexistent) server.
+@OptIn(ExperimentalCoilApi::class)
+@Composable
+private fun WithPreviewThumbnails(content: @Composable () -> Unit) {
+    CompositionLocalProvider(
+        LocalAsyncImagePreviewHandler provides AsyncImagePreviewHandler { _ ->
+            ColorImage(color = 0xFFFFaaFF.toInt())
+        }
+    ) {
+        content()
+    }
+}
 
 @Preview(device = Devices.DESKTOP)
 @Composable
@@ -802,30 +765,33 @@ fun EntriesScreenContentPreview() {
     }
     val showDeleteConfirmation = remember { mutableStateOf(false) }
     val spec = FileBrowserSpec("Files", "files", "Sample text options.")
-    AppTheme {
-        EntriesScreenContent(
-            spec = spec,
-            currentPath = spec.path,
-            entries = entries,
-            sort = sort,
-            isLoading = false,
-            isLoadingMore = false,
-            hasMorePages = true,
-            selectedPaths = setOf("photos/photo.jpg"),
-            isReadOnly = false,
-            isUploading = false,
-            showDeleteConfirmation = showDeleteConfirmation,
-            onRetry = { sort = it },
-            onLoadMore = {},
-            onEntryClick = { _, _, _ -> },
-            onClearSelection = {},
-            onDownloadSelected = {},
-            performDelete = {
-                delay(2.seconds)
-                showDeleteConfirmation.value = false
-            },
-            onUpload = {}
-        )
+    WithPreviewThumbnails {
+        AppTheme {
+            EntriesScreenContent(
+                remote = PreviewRemote,
+                spec = spec,
+                currentPath = spec.path,
+                entries = entries,
+                sort = sort,
+                isLoading = false,
+                isLoadingMore = false,
+                hasMorePages = true,
+                selectedPaths = setOf("photos/photo.jpg"),
+                isReadOnly = false,
+                isUploading = false,
+                showDeleteConfirmation = showDeleteConfirmation,
+                onRetry = { sort = it },
+                onLoadMore = {},
+                onEntryClick = { _, _, _ -> },
+                onClearSelection = {},
+                onDownloadSelected = {},
+                performDelete = {
+                    delay(2.seconds)
+                    showDeleteConfirmation.value = false
+                },
+                onUpload = {}
+            )
+        }
     }
 }
 
@@ -833,26 +799,29 @@ fun EntriesScreenContentPreview() {
 @Composable
 fun EntriesScreenContentLoadingPreview() {
     val spec = FileBrowserSpec("Files", "files", "Sample text options.")
-    AppTheme {
-        EntriesScreenContent(
-            spec = spec,
-            currentPath = spec.path,
-            sort = Sort(),
-            entries = emptyList(),
-            isLoading = true,
-            isLoadingMore = false,
-            hasMorePages = false,
-            selectedPaths = emptySet(),
-            isReadOnly = true,
-            isUploading = false,
-            showDeleteConfirmation = mutableStateOf(false),
-            onRetry = {},
-            onLoadMore = {},
-            onEntryClick = { _, _, _ -> },
-            onClearSelection = {},
-            onDownloadSelected = {},
-            performDelete = {},
-            onUpload = {}
-        )
+    WithPreviewThumbnails {
+        AppTheme {
+            EntriesScreenContent(
+                remote = PreviewRemote,
+                spec = spec,
+                currentPath = spec.path,
+                sort = Sort(),
+                entries = emptyList(),
+                isLoading = true,
+                isLoadingMore = false,
+                hasMorePages = false,
+                selectedPaths = emptySet(),
+                isReadOnly = true,
+                isUploading = false,
+                showDeleteConfirmation = mutableStateOf(false),
+                onRetry = {},
+                onLoadMore = {},
+                onEntryClick = { _, _, _ -> },
+                onClearSelection = {},
+                onDownloadSelected = {},
+                performDelete = {},
+                onUpload = {}
+            )
+        }
     }
 }

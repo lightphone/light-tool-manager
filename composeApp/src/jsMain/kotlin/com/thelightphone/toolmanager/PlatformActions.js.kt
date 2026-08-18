@@ -123,7 +123,7 @@ actual fun triggerFilePicker(
 // copy is what throws "invalid array length" in the browser (confirmed: this exact conversion
 // OOMs under constrained heap in a direct V8 test). Calling fetch() directly here sidesteps that
 // entirely — native fetch accepts a typed array as the body with no such copy.
-actual suspend fun uploadOctetStream(
+actual suspend fun platformUploadOctetStream(
     remote: Remote,
     url: String,
     bytes: ByteArray,

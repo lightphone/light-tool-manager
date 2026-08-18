@@ -27,8 +27,9 @@ expect fun getApiKey(): String?
 // JS Array before re-wrapping it as a Uint8Array, no matter how setBody was called. For large
 // (~100MB+) uploads that intermediate allocation is what throws "invalid array length" in the
 // browser. Platform actuals that don't have this problem (JVM/Android) can just delegate to
-// Remote.uploadBytes internally.
-expect suspend fun uploadOctetStream(
+// Remote.uploadBytes internally. Backs Remote.uploadOctetStream — call that instead of this
+// directly.
+expect suspend fun platformUploadOctetStream(
     remote: Remote,
     url: String,
     bytes: ByteArray,

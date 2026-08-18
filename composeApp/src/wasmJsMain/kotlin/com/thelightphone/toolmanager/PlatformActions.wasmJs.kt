@@ -53,7 +53,7 @@ actual fun getApiKey(): String? {
     return cachedApiKey
 }
 
-actual suspend fun uploadOctetStream(
+actual suspend fun platformUploadOctetStream(
     remote: Remote,
     url: String,
     bytes: ByteArray,
