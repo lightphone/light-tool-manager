@@ -12,7 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
-import io.ktor.client.HttpClient
+import com.thelightphone.filemanager.Remote
 import kotlinx.coroutines.launch
 
 @Composable
@@ -37,7 +37,7 @@ fun DropBoxScreen(
 
 @Composable
 fun DropBoxScreen(
-    client: HttpClient,
+    remote: Remote,
     spec: DropboxSpec,
     onAlert: (ToolManagerAlert) -> Unit = ::pushGlobalAlert
 ) {
@@ -50,7 +50,7 @@ fun DropBoxScreen(
         coroutineScope.launch {
             // uploadFiles already posts a "<file> was uploaded, N remaining" alert per file, so
             // there's no separate batch-complete alert here — the last one (0 remaining) is that.
-            uploadFiles(files, currentPath, client, onIsUploading = { isUploading = it }) {}
+            uploadFiles(files, currentPath, remote, onIsUploading = { isUploading = it }) {}
         }
     }
 

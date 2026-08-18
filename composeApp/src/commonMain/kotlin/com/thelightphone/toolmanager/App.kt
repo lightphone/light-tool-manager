@@ -35,15 +35,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.thelightphone.filemanager.HttpRemote
+import com.thelightphone.filemanager.Remote
 import com.thelightphone.toolmanager.composeapp.generated.resources.Res
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
-import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.http.HttpHeaders
-import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -159,21 +159,22 @@ fun App() {
 
         val apiKey = remember { getApiKey() }
 
-        val client = remember(apiKey) {
-            HttpClient {
-                install(ContentNegotiation) {
-                    json()
-                }
-                install(HttpTimeout) {
-                    requestTimeoutMillis = 10000
-                    connectTimeoutMillis = 5000
-                }
-                if (apiKey != null) {
-                    defaultRequest {
-                        header(HttpHeaders.Authorization, "Bearer $apiKey")
+        val remote: Remote = remember(apiKey) {
+            HttpRemote(
+                HttpClient {
+                    install(ContentNegotiation) {
+                        json()
                     }
-                }
-            }
+                    install(HttpTimeout) {
+                        requestTimeoutMillis = 10000
+                        connectTimeoutMillis = 5000
+                    }
+                    if (apiKey != null) {
+                        defaultRequest {
+                            header(HttpHeaders.Authorization, "Bearer $apiKey")
+                        }
+                    }
+                })
         }
 
         fun navigateTo(spec: DataViewSpec, pushState: Boolean = true) {
@@ -219,11 +220,7 @@ fun App() {
             var wasConnected = true
             while (true) {
                 delay(pollDuration)
-                val success = try {
-                    client.get("${getBaseUrl()}/ping").status.isSuccess()
-                } catch (_: Throwable) {
-                    false
-                }
+                val success = remote.ping().getOrDefault(false)
                 if (success != wasConnected) {
                     wasConnected = success
                     if (success) {
@@ -259,28 +256,29 @@ fun App() {
             ) {
                 return@Column when (val spec = currentSpec) {
                     null -> RootScreen(
-                        client = client,
+                        remote = remote,
                         spec = null,
                         onPageClick = { navigateTo(it) },
                     )
 
                     is RootViewSpec -> RootScreen(
-                        client = client,
+                        remote = remote,
                         spec = spec,
                         onPageClick = { navigateTo(it) },
                     )
 
                     is FileBrowserSpec -> EntriesScreen(
-                        client = client,
+                        remote = remote,
                         spec = spec,
                     )
 
                     is DropboxSpec -> DropBoxScreen(
-                        client = client,
+                        remote = remote,
                         spec = spec,
                     )
 
-                    is CustomSpec -> { /*Do not render anything for custom specs */ }
+                    is CustomSpec -> { /*Do not render anything for custom specs */
+                    }
                 }
             }
         }

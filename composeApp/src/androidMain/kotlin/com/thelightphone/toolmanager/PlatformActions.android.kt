@@ -2,13 +2,8 @@ package com.thelightphone.toolmanager
 
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontWeight
-import io.ktor.client.HttpClient
-import io.ktor.client.plugins.timeout
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.http.ContentType
+import com.thelightphone.filemanager.Remote
 import io.ktor.http.HttpStatusCode
-import io.ktor.http.contentType
 
 // ANDROID NOT CURRENTLY SUPPORTED
 // WE JUST NEED AN ACTIVE BUILD TO GET COMPOSE PREVIEWS TO SHOW
@@ -27,17 +22,10 @@ actual fun triggerFilePicker(
 actual fun getApiKey(): String? = null
 
 actual suspend fun uploadOctetStream(
-    client: HttpClient,
+    remote: Remote,
     url: String,
     bytes: ByteArray,
     timeoutMillis: Long,
-): HttpStatusCode {
-    val response = client.post(url) {
-        contentType(ContentType.Application.OctetStream)
-        setBody(bytes)
-        timeout { requestTimeoutMillis = timeoutMillis }
-    }
-    return response.status
-}
+): HttpStatusCode = remote.uploadBytes(url, bytes, timeoutMillis)
 
 internal actual fun fontFromBytes(identity: String, data: ByteArray, weight: FontWeight): Font? = null

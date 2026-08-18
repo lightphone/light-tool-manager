@@ -59,26 +59,18 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.thelightphone.filemanager.Remote
 import com.thelightphone.toolmanager.composeapp.generated.resources.Res
 import com.thelightphone.toolmanager.composeapp.generated.resources.ic_reverse_order_white
 import com.thelightphone.toolmanager.composeapp.generated.resources.ic_trash
 import com.thelightphone.toolmanager.composeapp.generated.resources.ic_text_file
 import com.thelightphone.toolmanager.composeapp.generated.resources.ic_audio_waveform
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.request.delete
-import io.ktor.client.request.get
-import io.ktor.client.request.parameter
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.format.MonthNames
 import kotlinx.datetime.format.Padding
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Instant
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -93,7 +85,7 @@ import kotlin.time.Duration.Companion.seconds
 
 @Composable
 fun EntriesScreen(
-    client: HttpClient,
+    remote: Remote,
     spec: FileBrowserSpec,
     onAlert: (ToolManagerAlert) -> Unit = ::pushGlobalAlert
 ) {
@@ -124,13 +116,8 @@ fun EntriesScreen(
             }
 
             try {
-                val response: PaginatedResponse<Entry> =
-                    client.get("${getBaseUrl()}/api/files/$currentPath") {
-                        parameter("page", page)
-                        parameter("size", pageSize)
-                        parameter("sortBy", sort.sortBy)
-                        parameter("sortOrder", sort.sortOrder)
-                    }.body()
+                val response = remote.filesAt(currentPath, page, pageSize, sort.sortBy, sort.sortOrder)
+                    .getOrThrow()
 
                 allEntries = if (append) {
                     allEntries + response.data
@@ -178,16 +165,9 @@ fun EntriesScreen(
             return
         }
         coroutineScope.launch {
-            runCatching {
-                val response = client.post("${getBaseUrl()}/api/download") {
-                    contentType(ContentType.Application.Json)
-                    setBody(DownloadRequest(paths = selectedPaths.toList()))
-                }
-                if (response.status.isSuccess()) {
-                    val tokenResponse = response.body<DownloadTokenResponse>()
-                    triggerDownload("${getBaseUrl()}/api/download-zip/${tokenResponse.token}$keyParam")
-                    selectedPaths = emptySet()
-                }
+            remote.requestDownloadToken(selectedPaths.toList()).onSuccess { tokenResponse ->
+                triggerDownload("${getBaseUrl()}/api/download-zip/${tokenResponse.token}$keyParam")
+                selectedPaths = emptySet()
             }
         }
     }
@@ -195,10 +175,7 @@ fun EntriesScreen(
     // Initial load + fetch meta
     LaunchedEffect(currentPath) {
         loadEntries(sort, 1)
-        isReadOnly = runCatching {
-            val meta: DirectoryMeta = client.get("${getBaseUrl()}/api/meta/$currentPath").body()
-            meta.readOnly
-        }.getOrElse { true }
+        isReadOnly = remote.metaAt(currentPath).map { it.readOnly }.getOrElse { true }
     }
 
     fun navigateBack(): Boolean {
@@ -220,7 +197,7 @@ fun EntriesScreen(
             uploadFiles(
                 files,
                 currentPath,
-                client,
+                remote,
                 onIsUploading = { isUploading = it },
                 onSuccess = { loadEntries(sort, 1) }
             )
@@ -253,7 +230,7 @@ fun EntriesScreen(
         onClearSelection = { selectedPaths = emptySet() },
         onDownloadSelected = ::downloadSelected,
         performDelete = suspend {
-            deleteFiles(selectedPaths.toList(), client) {
+            deleteFiles(selectedPaths.toList(), remote) {
                 selectedPaths = emptySet()
                 loadEntries(sort, 1)
             }
@@ -484,7 +461,7 @@ private fun batchedMessage(names: List<String>, verb: String): String {
 suspend fun uploadFiles(
     files: List<Pair<String, ByteArray>>,
     currentPath: String,
-    client: HttpClient,
+    remote: Remote,
     onAlert: (ToolManagerAlert) -> Unit = ::pushGlobalAlert,
     onIsUploading: (Boolean) -> Unit,
     onSuccess: () -> Unit,
@@ -508,13 +485,13 @@ suspend fun uploadFiles(
         for ((fileName, bytes) in files) {
             runCatching {
                 val status = uploadOctetStream(
-                    client,
+                    remote,
                     "${getBaseUrl()}/api/upload/$currentPath/$fileName",
                     bytes,
                     5.minutes.inWholeMilliseconds,
                 )
                 if (status.isSuccess()) {
-                    client.post("${getBaseUrl()}/api/notify/$currentPath")
+                    remote.notifyUpload(currentPath)
                 }
                 status
             }.onSuccess { status ->
@@ -541,7 +518,7 @@ suspend fun uploadFiles(
 
 suspend fun deleteFiles(
     paths: List<String>,
-    client: HttpClient,
+    remote: Remote,
     onAlert: (ToolManagerAlert) -> Unit = ::pushGlobalAlert,
     onSuccess: () -> Unit,
 ) {
@@ -557,10 +534,8 @@ suspend fun deleteFiles(
 
         for (path in paths) {
             val fileName = path.substringAfterLast('/')
-            runCatching {
-                client.delete("${getBaseUrl()}/api/files/$path")
-            }.onSuccess { response ->
-                if (response.status.isSuccess()) {
+            remote.deleteFile(path).onSuccess { deleted ->
+                if (deleted) {
                     successes.add(fileName, 0)
                 } else {
                     failures.add(fileName, 0)

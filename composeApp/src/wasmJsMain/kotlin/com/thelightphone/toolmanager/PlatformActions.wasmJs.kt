@@ -2,13 +2,8 @@
 
 package com.thelightphone.toolmanager
 
-import io.ktor.client.HttpClient
-import io.ktor.client.plugins.timeout
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.http.ContentType
+import com.thelightphone.filemanager.Remote
 import io.ktor.http.HttpStatusCode
-import io.ktor.http.contentType
 import kotlinx.browser.sessionStorage
 import kotlinx.browser.window
 import kotlin.js.ExperimentalWasmJsInterop
@@ -59,15 +54,8 @@ actual fun getApiKey(): String? {
 }
 
 actual suspend fun uploadOctetStream(
-    client: HttpClient,
+    remote: Remote,
     url: String,
     bytes: ByteArray,
     timeoutMillis: Long,
-): HttpStatusCode {
-    val response = client.post(url) {
-        contentType(ContentType.Application.OctetStream)
-        setBody(bytes)
-        timeout { requestTimeoutMillis = timeoutMillis }
-    }
-    return response.status
-}
+): HttpStatusCode = remote.uploadBytes(url, bytes, timeoutMillis)

@@ -23,16 +23,14 @@ import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.request.get
+import com.thelightphone.filemanager.Remote
 import kotlinx.coroutines.launch
 
 // Renders whichever page `spec` points at: the true top-level root (spec == null) or a nested
 // RootViewSpec page. Fetches its own children (one level) via GET /api/tree
 @Composable
 fun RootScreen(
-    client: HttpClient,
+    remote: Remote,
     spec: DataViewSpec?,
     onPageClick: (DataViewSpec) -> Unit,
     onAlert: (ToolManagerAlert) -> Unit = ::pushGlobalAlert,
@@ -45,7 +43,7 @@ fun RootScreen(
         coroutineScope.launch {
             isLoading = true
             val path = spec?.path ?: "."
-            runCatching { client.get("${getBaseUrl()}/api/tree/$path").body<List<DataViewSpec>>() }
+            remote.treeAt(path)
                 .onSuccess { pages = it }
                 .onFailure {
                     val alert = ToolManagerAlert("Failed to load: ${it.message}")

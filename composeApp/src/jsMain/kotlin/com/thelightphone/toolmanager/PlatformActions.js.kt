@@ -1,6 +1,6 @@
 package com.thelightphone.toolmanager
 
-import io.ktor.client.HttpClient
+import com.thelightphone.filemanager.Remote
 import io.ktor.http.HttpStatusCode
 import kotlinx.browser.document
 import kotlinx.browser.sessionStorage
@@ -124,7 +124,7 @@ actual fun triggerFilePicker(
 // OOMs under constrained heap in a direct V8 test). Calling fetch() directly here sidesteps that
 // entirely — native fetch accepts a typed array as the body with no such copy.
 actual suspend fun uploadOctetStream(
-    client: HttpClient,
+    remote: Remote,
     url: String,
     bytes: ByteArray,
     timeoutMillis: Long,
@@ -135,8 +135,8 @@ actual suspend fun uploadOctetStream(
 
     val headers = js("({})")
     headers["Content-Type"] = "application/octet-stream"
-    // client's own `defaultRequest { header(Authorization, ...) }` (see App.kt) never runs here
-    // since this skips the HttpClient entirely — has to be attached by hand.
+    // The Remote's own HttpClient (with its `defaultRequest { header(Authorization, ...) }`, see
+    // App.kt) never runs here since this bypasses HttpClient entirely — has to be attached by hand.
     getApiKey()?.let { headers["Authorization"] = "Bearer $it" }
     val init = js("({})")
     init.method = "POST"

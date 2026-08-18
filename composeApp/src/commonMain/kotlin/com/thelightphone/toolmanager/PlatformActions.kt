@@ -2,7 +2,7 @@ package com.thelightphone.toolmanager
 
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontWeight
-import io.ktor.client.HttpClient
+import com.thelightphone.filemanager.Remote
 import io.ktor.http.HttpStatusCode
 
 expect fun getBaseUrl(): String
@@ -27,9 +27,9 @@ expect fun getApiKey(): String?
 // JS Array before re-wrapping it as a Uint8Array, no matter how setBody was called. For large
 // (~100MB+) uploads that intermediate allocation is what throws "invalid array length" in the
 // browser. Platform actuals that don't have this problem (JVM/Android) can just delegate to
-// client.post internally.
+// Remote.uploadBytes internally.
 expect suspend fun uploadOctetStream(
-    client: HttpClient,
+    remote: Remote,
     url: String,
     bytes: ByteArray,
     timeoutMillis: Long,
