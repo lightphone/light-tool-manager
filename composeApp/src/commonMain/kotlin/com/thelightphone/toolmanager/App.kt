@@ -41,9 +41,6 @@ import com.thelightphone.toolmanager.composeapp.generated.resources.Res
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.defaultRequest
-import io.ktor.client.request.header
-import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -170,9 +167,7 @@ fun App() {
                         connectTimeoutMillis = 5000
                     }
                     if (apiKey != null) {
-                        defaultRequest {
-                            header(HttpHeaders.Authorization, "Bearer $apiKey")
-                        }
+                        installRequestSigning(apiKey)
                     }
                 })
         }

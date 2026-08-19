@@ -12,10 +12,11 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
+@OptIn(ExperimentalStdlibApi::class)
 fun generateApiKey(): String {
     val bytes = ByteArray(32)
     SecureRandom().nextBytes(bytes)
-    return bytes.joinToString("") { "%02x".format(it) }
+    return bytes.toHexString()
 }
 
 interface KeyCipher {
@@ -34,6 +35,10 @@ interface ToolManagerAuth {
 
     // Checks `code` against the current time step. mints and returns new key when valid code passed
     fun mintKey(code: String): String?
+
+    // True if `signature` is a valid HMAC (see RequestSigning.kt) of (method, path, timestampMillis)
+    // under any currently-valid key, and timestampMillis is within the replay-tolerance window.
+    suspend fun verifySignature(method: String, path: String, timestampMillis: Long, signature: String): Boolean
 }
 
 private const val SELF_MINT_PREFIX = "_self_minted_"
@@ -55,6 +60,9 @@ class TotpToolManagerAuth(
     private val mintedKeys = ConcurrentHashMap.newKeySet<String>()
     private val cacheLock = Any()
 
+    // for nonces
+    private val seenSignatures = ConcurrentHashMap<String, Long>()
+
     private val lockoutLock = Any()
     private var failureCount = 0
     private var windowStart: Instant = clock.now()
@@ -65,6 +73,25 @@ class TotpToolManagerAuth(
 
     override fun validateKey(key: String): Boolean =
         key == primaryKey || mintedKeys.contains(key)
+
+    override suspend fun verifySignature(
+        method: String,
+        path: String,
+        timestampMillis: Long,
+        signature: String
+    ): Boolean {
+        val now = clock.now().toEpochMilliseconds()
+        if (kotlin.math.abs(now - timestampMillis) > SignatureToleranceMillis) return false
+
+        val candidateKeys = listOf(primaryKey) + mintedKeys
+        val validSignature = candidateKeys.any { key ->
+            constantTimeEquals(signRequest(key, method, path, timestampMillis), signature)
+        }
+        if (!validSignature) return false
+
+        seenSignatures.entries.removeIf { (_, seenAt) -> now - seenAt > SignatureToleranceMillis }
+        return seenSignatures.putIfAbsent(signature, timestampMillis) == null
+    }
 
     override fun currentCode(): String = hotp(secret, currentStep())
 

@@ -11,8 +11,11 @@ import com.thelightphone.toolmanager.PaginatedResponse
 import com.thelightphone.toolmanager.PaginationInfo
 import com.thelightphone.toolmanager.SortBy
 import com.thelightphone.toolmanager.SortOrder
+import com.thelightphone.toolmanager.SignatureQueryParam
+import com.thelightphone.toolmanager.TimestampQueryParam
 import com.thelightphone.toolmanager.getBaseUrl
 import com.thelightphone.toolmanager.platformUploadOctetStream
+import com.thelightphone.toolmanager.signRequest
 import com.thelightphone.toolmanager.triggerDownload
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -27,6 +30,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlin.jvm.JvmInline
+import kotlin.time.Clock
 
 interface Remote {
     suspend fun ping(): Result<Boolean>
@@ -44,7 +48,7 @@ interface Remote {
     suspend fun deleteFile(path: String): Result<Boolean>
     suspend fun uploadBytes(url: String, bytes: ByteArray, timeoutMillis: Long): HttpStatusCode
     suspend fun uploadOctetStream(path: String, fileName: String, bytes: ByteArray, timeoutMillis: Long): HttpStatusCode
-    fun downloadFile(token: String, apiKey: String? = null)
+    suspend fun downloadFile(token: String, apiKey: String? = null)
     fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest
 }
 
@@ -108,9 +112,16 @@ value class HttpRemote(private val client: HttpClient) : Remote {
         return response.status
     }
 
-    override fun downloadFile(token: String, apiKey: String?) {
-        val keyParam = apiKey?.let { "?key=$it" } ?: ""
-        triggerDownload("${getBaseUrl()}/api/download-zip/$token$keyParam")
+    override suspend fun downloadFile(token: String, apiKey: String?) {
+        val path = "/api/download-zip/$token"
+        val query = if (apiKey != null) {
+            val timestampMillis = Clock.System.now().toEpochMilliseconds()
+            val signature = signRequest(apiKey, "GET", path, timestampMillis)
+            "?$SignatureQueryParam=$signature&$TimestampQueryParam=$timestampMillis"
+        } else {
+            ""
+        }
+        triggerDownload("${getBaseUrl()}$path$query")
     }
 
     override suspend fun uploadOctetStream(
@@ -171,7 +182,7 @@ object PreviewRemote : Remote {
         timeoutMillis: Long
     ): HttpStatusCode = HttpStatusCode.OK
 
-    override fun downloadFile(token: String, apiKey: String?) {}
+    override suspend fun downloadFile(token: String, apiKey: String?) {}
 
     override fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest =
         ImageRequest.Builder(context).build()

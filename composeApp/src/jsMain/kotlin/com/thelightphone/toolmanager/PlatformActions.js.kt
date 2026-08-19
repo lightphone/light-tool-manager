@@ -2,10 +2,12 @@ package com.thelightphone.toolmanager
 
 import com.thelightphone.filemanager.Remote
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Url
 import kotlinx.browser.document
 import kotlinx.browser.sessionStorage
 import kotlinx.browser.window
 import kotlinx.coroutines.await
+import kotlin.time.Clock
 
 private const val API_KEY_STORAGE_KEY = "apiKey"
 
@@ -135,9 +137,15 @@ actual suspend fun platformUploadOctetStream(
 
     val headers = js("({})")
     headers["Content-Type"] = "application/octet-stream"
-    // The Remote's own HttpClient (with its `defaultRequest { header(Authorization, ...) }`, see
-    // App.kt) never runs here since this bypasses HttpClient entirely — has to be attached by hand.
-    getApiKey()?.let { headers["Authorization"] = "Bearer $it" }
+    // The Remote's own HttpClient (with its request-signing plugin, see App.kt) never runs here
+    // since this bypasses HttpClient entirely — has to be signed by hand instead.
+    getApiKey()?.let { apiKey ->
+        val timestampMillis = Clock.System.now().toEpochMilliseconds()
+        val path = Url(url).encodedPath
+        val signature = signRequest(apiKey, "POST", path, timestampMillis)
+        headers[TimestampHeader] = timestampMillis.toString()
+        headers[SignatureHeader] = signature
+    }
     val init = js("({})")
     init.method = "POST"
     init.body = body

@@ -113,14 +113,18 @@ fun Application.module(
     if (auth != null) {
         intercept(ApplicationCallPipeline.Plugins) {
             val path = call.request.path()
-            // /api/pair is deliberately excluded: a device pairing via a 6-digit code has no key
+            // /api/pair is deliberately excluded: a device pairing via a totp code has no key
             // yet, so it has to be reachable without one.
             if (path.startsWith("/api/") && path != PairPath) {
-                val headerKey = call.request.header(HttpHeaders.Authorization)?.removePrefix("Bearer ")
-                val queryKey = call.request.queryParameters["key"]
-                val validHeader = headerKey != null && auth.validateKey(headerKey)
-                val validQuery = queryKey != null && auth.validateKey(queryKey)
-                if (!validHeader && !validQuery) {
+                val signature = call.request.header(SignatureHeader)
+                    ?: call.request.queryParameters[SignatureQueryParam]
+                val timestamp = (call.request.header(TimestampHeader)
+                    ?: call.request.queryParameters[TimestampQueryParam])?.toLongOrNull()
+
+                val valid = signature != null && timestamp != null &&
+                    auth.verifySignature(call.request.httpMethod.value, path, timestamp, signature)
+
+                if (!valid) {
                     call.respond(HttpStatusCode.Unauthorized)
                     finish()
                     return@intercept

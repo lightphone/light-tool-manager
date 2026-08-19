@@ -42,7 +42,7 @@ fun RootScreen(
     fun load() {
         coroutineScope.launch {
             isLoading = true
-            val path = spec?.path ?: "."
+            val path = spec?.path.orEmpty()
             remote.treeAt(path)
                 .onSuccess { pages = it }
                 .onFailure {
