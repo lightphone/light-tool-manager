@@ -29,7 +29,6 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import kotlin.jvm.JvmInline
 import kotlin.time.Clock
 
 interface Remote {
@@ -48,12 +47,11 @@ interface Remote {
     suspend fun deleteFile(path: String): Result<Boolean>
     suspend fun uploadBytes(url: String, bytes: ByteArray, timeoutMillis: Long): HttpStatusCode
     suspend fun uploadOctetStream(path: String, fileName: String, bytes: ByteArray, timeoutMillis: Long): HttpStatusCode
-    suspend fun downloadFile(token: String, apiKey: String? = null)
+    suspend fun downloadFile(token: String)
     fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest
 }
 
-@JvmInline
-value class HttpRemote(private val client: HttpClient) : Remote {
+class HttpRemote(private val client: HttpClient, private val apiKey: String?) : Remote {
     override suspend fun ping(): Result<Boolean> {
         return try {
             Result.success(client.get("${getBaseUrl()}/ping").status.isSuccess())
@@ -112,15 +110,13 @@ value class HttpRemote(private val client: HttpClient) : Remote {
         return response.status
     }
 
-    override suspend fun downloadFile(token: String, apiKey: String?) {
+    override suspend fun downloadFile(token: String) {
         val path = "/api/download-zip/$token"
-        val query = if (apiKey != null) {
+        val query = apiKey?.let { key ->
             val timestampMillis = Clock.System.now().toEpochMilliseconds()
-            val signature = signRequest(apiKey, "GET", path, timestampMillis)
+            val signature = signRequest(key, "GET", path, timestampMillis)
             "?$SignatureQueryParam=$signature&$TimestampQueryParam=$timestampMillis"
-        } else {
-            ""
-        }
+        }.orEmpty()
         triggerDownload("${getBaseUrl()}$path$query")
     }
 
@@ -182,7 +178,7 @@ object PreviewRemote : Remote {
         timeoutMillis: Long
     ): HttpStatusCode = HttpStatusCode.OK
 
-    override suspend fun downloadFile(token: String, apiKey: String?) {}
+    override suspend fun downloadFile(token: String) {}
 
     override fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest =
         ImageRequest.Builder(context).build()

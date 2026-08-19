@@ -31,7 +31,11 @@ fun main() {
         )
     }
     val combinedView = LeafView(
-        FileBrowserSpec(label = "All Files", path = "all", headerText = "These are all of the files!"),
+        FileBrowserSpec(
+            label = "All Files",
+            path = "all",
+            headerText = "These are all of the files!"
+        ),
         DesktopDataTree(allDirs, uploadsDir)
     )
 
@@ -45,6 +49,17 @@ fun main() {
             buttonText = "Click Here to Upload"
         ),
         DesktopDataTree(uploadsDir)
+    )
+
+    val export = LeafView(
+        ExportSpec(
+            "Export Greeting",
+            "export",
+            "hello.txt",
+            "Click below to export your greeting.",
+            "Export"
+        ),
+        DesktopDataTree(resourceRoot.resolve("Text"))
     )
 
     val hiddenDropbox = LeafView(
@@ -74,7 +89,7 @@ fun main() {
         BranchView(
             RootViewSpec("root", ""),
             StaticBranchProvider(
-                perDirViews + combinedView + uploadsDropBox + hiddenDropbox + customDataEndpoint
+                perDirViews + combinedView + uploadsDropBox + hiddenDropbox + customDataEndpoint + export
             )
         )
     }

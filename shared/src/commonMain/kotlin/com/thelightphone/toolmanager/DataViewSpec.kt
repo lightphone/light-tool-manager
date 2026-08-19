@@ -59,6 +59,20 @@ data class DropboxSpec(
 }
 
 @Serializable
+data class ExportSpec(
+    override val label: String,
+    override val path: String,
+    val resourceSubPath: String, // the thing to get downloaded
+    override val headerText: String? = null,
+    val buttonText: String
+) :
+    LeafViewSpec() {
+    override fun withPathPrefix(prefix: String) = ExportSpec(label, joinPath(prefix, path), resourceSubPath, headerText, buttonText)
+
+    val resourceFullPath get() = joinPath(path, resourceSubPath)
+}
+
+@Serializable
 data class CustomSpec(
     override val label: String,
     override val path: String,

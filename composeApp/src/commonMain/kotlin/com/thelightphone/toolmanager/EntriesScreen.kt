@@ -169,7 +169,7 @@ fun EntriesScreen(
         if (selectedPaths.isEmpty()) return
         coroutineScope.launch {
             remote.requestDownloadToken(selectedPaths.toList()).onSuccess { tokenResponse ->
-                remote.downloadFile(tokenResponse.token, getApiKey())
+                remote.downloadFile(tokenResponse.token)
                 selectedPaths = emptySet()
             }
         }

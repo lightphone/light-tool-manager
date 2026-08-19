@@ -169,7 +169,9 @@ fun App() {
                     if (apiKey != null) {
                         installRequestSigning(apiKey)
                     }
-                })
+                },
+                apiKey
+            )
         }
 
         fun navigateTo(spec: DataViewSpec, pushState: Boolean = true) {
@@ -270,6 +272,11 @@ fun App() {
                     is DropboxSpec -> DropBoxScreen(
                         remote = remote,
                         spec = spec,
+                    )
+
+                    is ExportSpec -> ExportScreen(
+                        remote = remote,
+                        spec = spec
                     )
 
                     is CustomSpec -> { /*Do not render anything for custom specs */
