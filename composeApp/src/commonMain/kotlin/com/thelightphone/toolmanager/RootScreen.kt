@@ -26,8 +26,8 @@ import androidx.compose.ui.unit.sp
 import com.thelightphone.filemanager.Remote
 import kotlinx.coroutines.launch
 
-// Renders whichever page `spec` points at: the true top-level root (spec == null) or a nested
-// RootViewSpec page. Fetches its own children (one level) via GET /api/tree
+// Renders whichever page `spec` points at.
+// Fetches its own children (one level) via GET /api/tree
 @Composable
 fun RootScreen(
     remote: Remote,

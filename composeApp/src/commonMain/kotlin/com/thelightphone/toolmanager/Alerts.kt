@@ -123,8 +123,6 @@ fun AlertStack(
             }
         }
 
-        // Alerts no longer wanted (timed out, dismissed, or removed by the caller) start their
-        // exit transition here; AlertStackItem removes them from `rendered` once it finishes.
         for (alert in rendered) {
             if (alert.id !in currentIds) {
                 transitionStates[alert.id]?.targetState = false
@@ -172,8 +170,8 @@ private fun AlertStackItem(
         latestOnRequestDismiss()
     }
 
-    // currentState catches up to targetState once a transition finishes; currentState == false
-    // while targetState is also false (as opposed to false-because-not-yet-entered) means the
+    // currentState catches up to targetState once a transition finishes. currentState == false
+    // while targetState is also false (vs. false-because-not-yet-entered) means the
     // exit animation just completed.
     LaunchedEffect(transitionState.currentState, transitionState.targetState) {
         if (!transitionState.currentState && !transitionState.targetState) {

@@ -161,20 +161,13 @@ fun Application.module(
             }
         }
 
-        // No-op past the auth interceptor above (which already applies to every /api/* path
-        // except /api/pair): just reaching this with a 200 back is the validation. Lets a client
-        // check whether a stored key still works — e.g. after a restart minted a new primaryKey
-        // and dropped anything minted via /api/pair — without a full API call that could fail for
-        // unrelated reasons.
+        // No-op past the auth interceptor
         get("/api/validate") {
             call.respond(HttpStatusCode.OK)
         }
 
         // Returns the immediate children (one level) of the page at this path; empty path
         // ("." by the same convention as every other route below) means the top-level pages.
-        // showHidden=true opts out of the default filtering, surfacing DataViews with
-        // isHidden = true — meant for API-only callers, not the app's own navigation, which is
-        // why it isn't the default.
         get("/api/tree/{path...}") {
             val filePath = call.parameters.getAll("path")?.joinToString("/") ?: "."
             val showHidden = call.request.queryParameters["showHidden"] == "true"
@@ -470,9 +463,7 @@ private suspend fun streamFilesToZip(
                 dataProvider.getBytes(Path.of(filePath)).getOrThrow().use { input ->
                     withContext(Dispatchers.IO) { zipOutput.putNextEntry(ZipEntry(filename)) }
                     // Read+compress+flush one chunk at a time and hand it to the network right
-                    // away, instead of copying the whole file into zipOutput (and thus zipBuffer)
-                    // before ever writing to output — that held an entire file's compressed bytes
-                    // in memory at once, fine for a batch of small files, not for one large one.
+                    // away, instead of copying the whole file into zipOutput
                     while (true) {
                         val bytesRead = withContext(Dispatchers.IO) {
                             val n = input.read(readBuffer)

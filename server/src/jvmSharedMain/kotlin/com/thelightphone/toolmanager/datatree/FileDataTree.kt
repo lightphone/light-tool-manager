@@ -221,8 +221,7 @@ private val Path.entryType: EntryType
 private fun Path.toEntry(rootPath: Path, appendMeta: (Entry) -> Entry): Entry {
     val attrs = Files.readAttributes(this, java.nio.file.attribute.BasicFileAttributes::class.java)
     // `this` is always a resolved real path (see resolveAndValidate), so rootPath must be
-    // resolved too before relativizing, or a symlinked root produces
-    // a garbled relative path instead of a clean one.
+    // resolved too before relativizing
     return Entry(
         type = entryType,
         title = name,

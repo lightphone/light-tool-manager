@@ -31,6 +31,7 @@ import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlin.time.Clock
 
+// Abstraction for fetching data from the server
 interface Remote {
     suspend fun ping(): Result<Boolean>
     suspend fun treeAt(path: String): Result<List<DataViewSpec>>

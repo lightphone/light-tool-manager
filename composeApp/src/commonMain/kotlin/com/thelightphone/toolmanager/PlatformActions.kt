@@ -25,10 +25,9 @@ expect fun getApiKey(): String?
 // Bypasses HttpClient.post/setBody on purpose: ktor-client-js unconditionally routes every
 // outgoing request body through a conversion that copies the whole payload into a boxed plain
 // JS Array before re-wrapping it as a Uint8Array, no matter how setBody was called. For large
-// (~100MB+) uploads that intermediate allocation is what throws "invalid array length" in the
+// (~100MB+) uploads, that intermediate allocation throws "invalid array length" in the
 // browser. Platform actuals that don't have this problem (JVM/Android) can just delegate to
-// Remote.uploadBytes internally. Backs Remote.uploadOctetStream — call that instead of this
-// directly.
+// Remote.uploadBytes internally.
 expect suspend fun platformUploadOctetStream(
     remote: Remote,
     url: String,
@@ -37,6 +36,5 @@ expect suspend fun platformUploadOctetStream(
 ): HttpStatusCode
 
 // Constructing a Font straight from raw bytes is only available on skiko-backed targets (JS,
-// wasmJs) — the real androidx Android artifact has no such factory, only resource-ID-based
-// fonts. Returns null there, which is fine: Android isn't a currently-supported target anyway.
+// wasmJs)
 internal expect fun fontFromBytes(identity: String, data: ByteArray, weight: FontWeight): Font?

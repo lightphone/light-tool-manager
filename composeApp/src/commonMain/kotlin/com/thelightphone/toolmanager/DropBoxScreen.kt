@@ -48,9 +48,12 @@ fun DropBoxScreen(
 
     fun onUpload(files: List<Pair<String, ByteArray>>) {
         coroutineScope.launch {
-            // uploadFiles already posts a "<file> was uploaded, N remaining" alert per file, so
-            // there's no separate batch-complete alert here — the last one (0 remaining) is that.
-            uploadFiles(files, currentPath, remote, onIsUploading = { isUploading = it }) {}
+            uploadFiles(
+                files,
+                currentPath,
+                remote,
+                onAlert = onAlert,
+                onIsUploading = { isUploading = it }) {}
         }
     }
 

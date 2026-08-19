@@ -1,16 +1,13 @@
 package com.thelightphone.toolmanager
 
 import kotlinx.serialization.Serializable
-
-// Joins an ancestor path onto a local segment. `prefix` is empty for a top-level spec (nothing to
-// join), so this avoids producing a leading "/" in that case.
 private fun joinPath(prefix: String, segment: String) = if (prefix.isEmpty()) segment else "$prefix/$segment"
 
 @Serializable
 sealed class DataViewSpec {
     abstract val label: String
     // Whoever implements DataProvider.getChildren() must return specs whose `path` is just their
-    // own local segment, never pre-prefixed with ancestry — the server prefixes centrally with
+    // own local segment, never pre-prefixed with ancestry. the server prefixes centrally with
     // the full accumulated path when serving each level.
     abstract val path: String
     abstract val headerText: String?
@@ -18,13 +15,9 @@ sealed class DataViewSpec {
     abstract fun withPathPrefix(prefix: String): DataViewSpec
 }
 
-// Marks a spec as one that's always paired with a BranchDataTree in a DataView (see DataView.kt)
-// — enforced by BranchView's constructor accepting exactly this type, not just any DataViewSpec.
 @Serializable
 sealed class BranchViewSpec : DataViewSpec()
 
-// Marks a spec as one that's always paired with a LeafDataTree in a DataView (see DataView.kt) —
-// enforced by LeafView's constructor accepting exactly this type, not just any DataViewSpec.
 @Serializable
 sealed class LeafViewSpec : DataViewSpec()
 

@@ -19,7 +19,7 @@ import kotlin.time.Instant
 // COLUMN_IS_DIRECTORY / COLUMN_LAST_MODIFIED come from shared/.../LightFileProviderContract.kt,
 // the same constants the client module's LightFileProvider uses to build its cursors.
 
-// NOT YET TESTED!!
+// NOT YET FULLY TESTED!!
 // Will be used to route requests to third-party tools which use the fileShare
 class ContentResolverDataTree(
     private val contentResolver: ContentResolver,
@@ -110,8 +110,6 @@ class ContentResolverDataTree(
 
         // path doesn't exist
         if (cursor == null) {
-            // Path.of(String) needs API 34 on Android (Paths.get is the same thing, available
-            // since java.nio.file itself landed at API 26).
             val parentPath = filePath.parent ?: Paths.get(".")
             val parentCursor = try {
                 contentResolver.query(pathToUri(parentPath), arrayOf(COLUMN_IS_DIRECTORY), null, null, null)

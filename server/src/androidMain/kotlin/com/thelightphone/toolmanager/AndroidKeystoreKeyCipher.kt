@@ -13,10 +13,7 @@ private const val Transformation = "AES/GCM/NoPadding"
 private const val GcmIvLengthBytes = 12
 private const val GcmTagLengthBits = 128
 
-// AES-GCM via a key that never leaves AndroidKeyStore — a core system service, not a Play
-// Services API, so this works on GMS-free devices. Deliberately skips the androidx.security
-// (Jetpack Security/Tink) dependency for something this small: KeyGenParameterSpec + Cipher
-// directly is ~40 lines with no extra dependency weight.
+// AES-GCM via a key that never leaves AndroidKeyStore
 class AndroidKeystoreKeyCipher(
     private val keyAlias: String = "tool_manager_auth_key",
     private val keyStore: KeyStore = KeyStore.getInstance(AndroidKeyStoreProvider)

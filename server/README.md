@@ -1,6 +1,6 @@
 # Server
 
-Ktor module that exposes a tree of directories/tools over HTTP for the Tool Manager frontend to
+Server logic + Ktor HTTP wrapper for the Tool Manager frontend to
 browse. Runs embedded inside LightOS (Android target) or standalone via
 [serverrunner](../serverrunner) (JVM target).
 

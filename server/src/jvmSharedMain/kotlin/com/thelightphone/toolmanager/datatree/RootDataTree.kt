@@ -73,13 +73,11 @@ class RootDataTree(
     // level, stopping at the first leaf or when segments run out. Returns the node reached plus
     // whatever path segments remain unconsumed (the subPath for file ops). Unless showHidden is
     // true, a segment matching an isHidden node is treated the same as a segment that matches
-    // nothing — the node is invisible to this walk, not just excluded from listings.
+    // nothing.
     private suspend fun walk(path: Path, showHidden: Boolean = true): Result<Pair<DataView<*>, Path>> {
         awaitRefresh()
         val normalized = path.normalize()
-        // Path.of(".").normalize() collapses to the *empty* path (toString() == "", not "."),
-        // and an empty path is still reported as having one (empty-string) name component —
-        // check for emptiness directly rather than comparing against ".".
+        // Path.of(".").normalize() collapses to empty path
         val segments = if (normalized.toString().isEmpty()) {
             emptyList()
         } else {

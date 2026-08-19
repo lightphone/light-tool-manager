@@ -16,19 +16,9 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * Exposes this app's `<filesDir>/shared` directory to the ToolManager server's
- * `ContentResolverFileTree`, which this mirrors column-for-column and call-for-call.
- *
- * To use this, declare it in the consuming app's own manifest with a unique authority (this
- * library intentionally declares no `<provider>` of its own, since the authority must be unique
- * per app):
- *
- * ```xml
- * <provider
- *     android:name="com.thelightphone.sdk.LightFileProvider"
- *     android:authorities="${applicationId}.lightfileprovider"
- *     android:exported="true" />
- * ```
+ * EXPERIMENTAL
+ * Exposes this tools's `<filesDir>/shared` directory to the ToolManager server's
+ * `ContentResolverFileTree`
  */
 class LightFileProvider : ContentProvider() {
 
@@ -36,8 +26,8 @@ class LightFileProvider : ContentProvider() {
         const val SHARED_DIR = "shared"
     }
 
-    // Only the Tool Manager server (a system app) may call this — it exposes another app's
-    // private storage, so this is load-bearing access control, not a convenience check.
+    // Ensure that client is the SDK server (LightOS)
+    // we might want to make this optional?
     private fun checkCaller() {
         if (Binder.getCallingUid() != Process.SYSTEM_UID) {
             throw SecurityException("Access denied")
@@ -50,8 +40,6 @@ class LightFileProvider : ContentProvider() {
         val path = uri.path?.removePrefix("/").orEmpty()
         val root = root()
         val file = if (path.isEmpty()) root else File(root, path).canonicalFile
-        // Path.startsWith is component-aware; String.startsWith is not, and would also let a
-        // sibling like ".../shared-other" pass a ".../shared" prefix check.
         if (!file.toPath().startsWith(root.toPath())) {
             throw SecurityException("Path traversal not allowed")
         }
@@ -121,8 +109,7 @@ class LightFileProvider : ContentProvider() {
         return MimeTypeMap.getSingleton().getMimeTypeFromExtension(path.substringAfterLast('.', ""))
     }
 
-    // Writes go through openFile(mode = "w"/"rw"), not insert() — nothing in
-    // ContentResolverFileTree's contract calls this.
+    // Writes go through openFile(mode = "w"/"rw"), not insert()
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
 
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {

@@ -48,11 +48,8 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 
-// Not a licensed-for-distribution asset: composeResources/.gitignore excludes files/font/, so
-// these bytes only exist on machines that have been given the font directly. Read as raw "files"
-// resources (a plain string path) rather than typed Res.font.* accessors, since accessors are
-// only generated for files actually present at build time — referencing one directly would fail
-// to compile on any checkout that doesn't have the font.
+// We can't distribute akkurat with the source on current license
+// pull it in if you have it locally, otherwise fallback
 @Composable
 private fun rememberAppFontFamily(): FontFamily? {
     var fontFamily by remember { mutableStateOf<FontFamily?>(null) }
@@ -120,8 +117,7 @@ fun AppTheme(content: @Composable () -> Unit) {
 
 private val globalAlertsFlow = MutableStateFlow<List<ToolManagerAlert>>(emptyList())
 
-// Pushing an id already in the queue replaces that entry in place (e.g. the server-disconnected
-// banner keeps a fixed id) rather than adding a duplicate.
+// Pushing an id already in the queue replaces that entry in place
 fun pushGlobalAlert(alert: ToolManagerAlert) {
     val current = globalAlertsFlow.value
     globalAlertsFlow.value = if (current.any { it.id == alert.id }) {
@@ -140,18 +136,14 @@ private const val ServerDisconnectedAlertId = "server-disconnected"
 @Composable
 fun App() {
     AppTheme {
-        // null = at the true top-level root; otherwise, which page we're on. The composable
-        // rendered is dispatched off this spec's sealed type (see the `when` below), not off
-        // nullability alone — RootScreen also handles nested RootViewSpec pages.
+        // null = at the true top-level root, otherwise the page we're on. The composable
+        // rendered is dispatched off this spec's sealed type.
         var currentSpec by remember { mutableStateOf<DataViewSpec?>(null) }
 
-        // Parent of each currentSpec, in navigation order, so Back returns to the immediate
-        // parent rather than always jumping to the true root.
         var backStack by remember { mutableStateOf<List<DataViewSpec?>>(emptyList()) }
 
         // Every spec navigated to this session, keyed by its pushed path string, so a browser
-        // back/forward event (which only hands back a path string) can be resolved to a spec
-        // without needing the whole page tree in memory.
+        // back/forward event can be resolved to a spec.
         var visitedSpecs by remember { mutableStateOf<Map<String, DataViewSpec>>(emptyMap()) }
 
         val apiKey = remember { getApiKey() }
@@ -194,9 +186,6 @@ fun App() {
             pushBrowserState(previous?.path)
         }
 
-        // Handle browser back/forward. A path string resolves against specs visited this
-        // session; anything unresolvable (e.g. a stale/foreign history entry) falls back to root
-        // rather than getting stuck.
         LaunchedEffect(Unit) {
             onBrowserBack { pathString ->
                 val target = pathString?.let { visitedSpecs[it] }
@@ -209,9 +198,7 @@ fun App() {
             }
         }
 
-        // Server connectivity polling. The banner isn't a transient toast, so it's pushed once
-        // per state transition (not re-pushed every poll tick) and given an infinite duration —
-        // it's dismissed explicitly on reconnect rather than timing itself out.
+        // ping server continuously
         LaunchedEffect(Unit) {
             val pollDuration = 6.seconds
             var wasConnected = true
@@ -279,8 +266,7 @@ fun App() {
                         spec = spec
                     )
 
-                    is CustomSpec -> { /*Do not render anything for custom specs */
-                    }
+                    is CustomSpec -> { /*Do not render anything for custom specs */ }
                 }
             }
         }

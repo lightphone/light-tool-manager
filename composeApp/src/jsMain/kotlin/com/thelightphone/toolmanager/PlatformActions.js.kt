@@ -49,6 +49,7 @@ actual fun onBrowserBack(handler: (path: String?) -> Unit) {
     }
 }
 
+// Lots of LLM help below, this was annoying AF
 actual fun triggerFilePicker(
     multiple: Boolean,
     onFilesSelected: (files: List<Pair<String, ByteArray>>) -> Unit,

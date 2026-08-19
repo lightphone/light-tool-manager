@@ -59,9 +59,6 @@ class ThumbnailDataTree(
         }
     }
 
-    // The File+Size+CancellationSignal overload needs API 29; minSdk here is 26. Unlike video,
-    // ThumbnailUtils.createImageThumbnail has no legacy String-path overload at all — the whole
-    // method was new in API 29 — so 26-28 decodes the file manually and downsamples it instead.
     override fun getImageThumbnail(filePath: Path): Result<InputStream>? {
         return cachedThumbnail(filePath) { file ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
