@@ -18,7 +18,6 @@ Types of issues we are excited to receive:
 * **Bug Reports** (something does not work as it is intended to)
   * Please include the commit on which you are experiencing the issue, a description, and detailed reproduction steps.
 * **Feature Requests** ("it would be helpful if this software could also do `X`")
-  * This includes requests to add open source third-party libraries or Android APIs to the build [plugin's](plugin) allow-list!
   * New features should be relevant to a meaningful percentage of Light Phone users / consumers of this software. We reserve the right to make the final call on whether or not this is true for your issue.
 * **Security Issues** (something in this software might allow a bad actor to degrade a Light Phone user's experience or violate their privacy)
 * **_Material_ Performance Improvements** (something in this software is actively degrading a Light Phone user's experience, or is egregiously consuming resources)
