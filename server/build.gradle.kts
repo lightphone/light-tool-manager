@@ -1,14 +1,15 @@
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
+    alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.androidLibrary)
     `maven-publish`
 }
 
 android {
-    namespace = "com.thelightphone.filemanager.server"
+    namespace = "com.thelightphone.toolmanager.server"
     compileSdk = 36
     defaultConfig {
-        minSdk = 34
+        minSdk = 26
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

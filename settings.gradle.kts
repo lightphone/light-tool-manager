@@ -1,4 +1,4 @@
-rootProject.name = "PhotoBrowser"
+rootProject.name = "LightToolManager"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 pluginManagement {
@@ -28,6 +28,7 @@ dependencyResolutionManagement {
     }
 }
 
+include(":client")
 include(":composeApp")
 include(":server")
 include(":serverrunner")

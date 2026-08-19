@@ -5,7 +5,7 @@ plugins {
 }
 
 application {
-    mainClass.set("com.com.thelightphone.photobrowser.MainKt")
+    mainClass.set("com.thelightphone.toolmanager.MainKt")
 
     val isDevelopment: Boolean = project.ext.has("development")
     applicationDefaultJvmArgs = listOf("-Dio.ktor.development=$isDevelopment")

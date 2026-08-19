@@ -8,10 +8,10 @@ plugins {
 }
 
 android {
-    namespace = "com.thelightphone.filemanager.shared"
+    namespace = "com.thelightphone.toolmanager.shared"
     compileSdk = 36
     defaultConfig {
-        minSdk = 24
+        minSdk = 26
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -40,6 +40,7 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlincrypto.hmacSha2)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

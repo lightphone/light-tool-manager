@@ -8,10 +8,10 @@ plugins {
 }
 
 android {
-    namespace = "com.thelightphone.filemanager"
+    namespace = "com.thelightphone.toolmanager"
     compileSdk = 35
     defaultConfig {
-        minSdk = 24
+        minSdk = 26
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -61,6 +61,7 @@ kotlin {
             implementation(libs.ktor.serializationKotlinxJson)
             implementation(libs.coil.compose)
             implementation(libs.coil.networkKtor)
+            implementation(libs.kotlinx.datetime)
             implementation(projects.shared)
         }
 
