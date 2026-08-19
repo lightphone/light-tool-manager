@@ -2,6 +2,8 @@
 
 or: a local dash for getting stuff to and from your Light Phone
 
+![File browser template](composeApp/.docs/browser_template.png)
+
 ## tl;dr
 
 This repo contains the source code for a full-stack web app - the Tool Manager (f.k.a PhotoBrowser, f.k.a FileManager) - that runs embedded within LightOS 
