@@ -18,22 +18,14 @@ plugins {
 }
 
 allprojects {
-    // KGP's default auto-downloaded Node.js version tracks current Node releases, which need a
-    // glibc/libstdc++ newer than JitPack's build container ships — that container failed with
-    // missing GLIBC_2.25/2.27/2.28 and CXXABI_1.3.11 trying to run a Node 24 binary. Node 16.x is
-    // the last LTS line built against an old enough glibc (>= 2.17) to run there; pinning both the
-    // classic JS and Wasm targets' Node installs to it avoids depending on whatever KGP's default
-    // happens to be. This only affects which Node binary is downloaded/used for npm/webpack — it
-    // doesn't change what Kotlin/JS or Kotlin/Wasm code compiles to.
-    // NodeJsPlugin/WasmNodeJsPlugin are applied per-subproject (composeApp, shared), not to the
-    // root project, but the actual NodeJsEnvSpec/WasmNodeJsEnvSpec extension they share is
-    // root-level singleton state — hence checking `plugins.withType` here (inside allprojects,
-    // so it fires wherever the plugin actually lands) but configuring `rootProject.the<...>()`.
-    plugins.withType<NodeJsPlugin> {
-        rootProject.the<NodeJsEnvSpec>().version.set("18.20.4")
-    }
-    plugins.withType<WasmNodeJsPlugin> {
-        rootProject.the<WasmNodeJsEnvSpec>().version.set("18.20.4")
+    // https://github.com/jitpack/jitpack.io/issues/7637#issuecomment-3738464498
+    if (System.getenv("JITPACK") == "true") {
+        plugins.withType<NodeJsPlugin> {
+            rootProject.the<NodeJsEnvSpec>().download.set(false)
+        }
+        plugins.withType<WasmNodeJsPlugin> {
+            rootProject.the<WasmNodeJsEnvSpec>().download.set(false)
+        }
     }
 
     // JitPack sets GROUP/VERSION env vars (e.g. GROUP=com.github.lightphone.light-tool-manager)
