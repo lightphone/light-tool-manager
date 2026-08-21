@@ -14,8 +14,14 @@ plugins {
 }
 
 allprojects {
-    group = "com.thelightphone.toolmanager"
-    version = "0.0.6-dirty"
+    // JitPack sets GROUP/VERSION env vars (e.g. GROUP=com.github.lightphone.light-tool-manager)
+    // during its build so published artifacts land under its own coordinate space. Falling back
+    // to our own values keeps local builds and the GitHubPackages publish below unaffected. This
+    // matters beyond cosmetics: without it, a JitPack-built module's POM would declare its
+    // dependency on a sibling module (e.g. client-android -> shared-android) using OUR groupId,
+    // which JitPack never published under — breaking transitive resolution for consumers.
+    group = System.getenv("GROUP") ?: "com.thelightphone.toolmanager"
+    version = System.getenv("VERSION") ?: "0.0.6-dirty"
 
     val localProperties = Properties().apply {
         rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
@@ -26,7 +32,7 @@ allprojects {
             repositories {
                 maven {
                     name = "GitHubPackages"
-                    url = uri("https://maven.pkg.github.com/lightphone/light-file-manager")
+                    url = uri("https://maven.pkg.github.com/lightphone/light-tool-manager")
                     credentials {
                         username = localProperties.getProperty("gpr.user") ?: System.getenv("GITHUB_ACTOR")
                         password = localProperties.getProperty("gpr.key") ?: System.getenv("GITHUB_TOKEN")

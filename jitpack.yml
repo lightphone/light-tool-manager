@@ -1,0 +1,4 @@
+jdk:
+  - openjdk17
+install:
+  - ./gradlew :client:publishToMavenLocal :server:publishToMavenLocal :shared:publishToMavenLocal
