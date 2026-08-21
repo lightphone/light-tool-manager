@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidLibrary)
     `maven-publish`
+    alias(libs.plugins.vanniktechMavenPublish)
 }
 
 android {

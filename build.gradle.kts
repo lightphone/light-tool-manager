@@ -1,5 +1,6 @@
 import java.util.Properties
 import kotlin.apply
+import com.vanniktech.maven.publish.MavenPublishBaseExtension
 
 plugins {
     // this is necessary to avoid the plugins to be loaded multiple times
@@ -11,26 +12,44 @@ plugins {
     alias(libs.plugins.kotlinJvm) apply false
     alias(libs.plugins.kotlinMultiplatform) apply false
     alias(libs.plugins.ktor) apply false
+    alias(libs.plugins.vanniktechMavenPublish) apply false
 }
 
 allprojects {
     group = "com.thelightphone.toolmanager"
-    version = "0.0.6-dirty"
+    version = "0.0.7"
 
-    val localProperties = Properties().apply {
-        rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
-    }
+    plugins.withId("com.vanniktech.maven.publish") {
+        extensions.configure<MavenPublishBaseExtension> {
+            publishToMavenCentral()
+            signAllPublications()
 
-    plugins.withId("maven-publish") {
-        extensions.configure<PublishingExtension> {
-            repositories {
-                maven {
-                    name = "GitHubPackages"
-                    url = uri("https://maven.pkg.github.com/lightphone/light-file-manager")
-                    credentials {
-                        username = localProperties.getProperty("gpr.user") ?: System.getenv("GITHUB_ACTOR")
-                        password = localProperties.getProperty("gpr.key") ?: System.getenv("GITHUB_TOKEN")
+            pom {
+                name.set(project.name)
+                description.set("Tool Manager: a local dash for getting stuff on and off your Light Phone.")
+                inceptionYear.set("2026")
+                url.set("https://github.com/lightphone/light-tool-manager")
+
+                licenses {
+                    license {
+                        name.set("MIT License")
+                        url.set("https://github.com/lightphone/light-tool-manager/blob/main/LICENSE")
+                        distribution.set("https://github.com/lightphone/light-tool-manager/blob/main/LICENSE")
                     }
+                }
+
+                developers {
+                    developer {
+                        id.set("thelightphone")
+                        name.set("The Light Phone")
+                        url.set("https://github.com/lightphone")
+                    }
+                }
+
+                scm {
+                    url.set("https://github.com/lightphone/light-tool-manager")
+                    connection.set("scm:git:git://github.com/lightphone/light-tool-manager.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/lightphone/light-tool-manager.git")
                 }
             }
         }

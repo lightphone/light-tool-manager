@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
     alias(libs.plugins.androidLibrary)
     `maven-publish`
+    alias(libs.plugins.vanniktechMavenPublish)
 }
 
 android {
