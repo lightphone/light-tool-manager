@@ -28,6 +28,7 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import kotlin.time.Clock
 
@@ -126,7 +127,12 @@ class HttpRemote(private val client: HttpClient, private val apiKey: String?) : 
         fileName: String,
         bytes: ByteArray,
         timeoutMillis: Long
-    ): HttpStatusCode = platformUploadOctetStream(this, "${getBaseUrl()}/api/upload/$path/$fileName", bytes, timeoutMillis)
+    ): HttpStatusCode = platformUploadOctetStream(
+        this,
+        "${getBaseUrl()}/api/upload/$path/${fileName.encodeURLPathPart()}",
+        bytes,
+        timeoutMillis
+    )
 
     override fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest =
         ImageRequest.Builder(context)

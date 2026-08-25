@@ -6,7 +6,9 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
+import android.os.Build
 import androidx.annotation.RequiresPermission
 import com.thelightphone.toolmanager.datatree.RootDataTree
 import io.ktor.server.engine.EmbeddedServer
@@ -21,6 +23,16 @@ import java.io.File
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
+data class LocalNetworkInfo(
+    val transport: Transport,
+    val ssid: String?,
+    val ipAddress: String?,
+    // null means undeterminable (requires API 33+); true means no password/open network
+    val isOpenNetwork: Boolean?
+) {
+    enum class Transport { WIFI, ETHERNET }
+}
+
 class ToolManagerServiceAndroid(
     private val rootDataProvider: RootDataTree,
     private val context: Context,
@@ -28,6 +40,7 @@ class ToolManagerServiceAndroid(
     private val port: Int = HTTPS_PORT,
     private val enableLogging: Boolean = false,
     private val onNetworkLost: (() -> Unit)? = null,
+    private val onNetworkNeedsApproval: ((LocalNetworkInfo) -> Boolean)? = null,
     private val provideNewAuth: () -> ToolManagerAuth? = { null }
 ) {
 
@@ -48,11 +61,35 @@ class ToolManagerServiceAndroid(
     fun start(): Boolean {
         if (isRunning) return true
 
-        if (!hasLocalNetwork()) {
+        val networkInfo = getLocalNetworkInfo()
+        if (networkInfo == null) {
             logger.log(TAG, "No WiFi, hotspot, or ethernet connection — refusing to start")
             return false
         }
 
+        val approvalCallback = onNetworkNeedsApproval
+        if (approvalCallback != null && !approvalCallback(networkInfo)) {
+            return false
+        }
+
+        return startInternal()
+    }
+
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
+    fun confirmStart(approvedNetwork: LocalNetworkInfo): Boolean {
+        if (isRunning) return true
+
+        val currentNetwork = getLocalNetworkInfo()
+        if (currentNetwork == null || currentNetwork != approvedNetwork) {
+            logger.log(TAG, "Network changed since approval — refusing to start")
+            return false
+        }
+
+        return startInternal()
+    }
+
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
+    private fun startInternal(): Boolean {
         CoroutineScope(Dispatchers.IO).launch { rootDataProvider.refreshProviders() }
 
         auth = provideNewAuth()
@@ -108,12 +145,48 @@ class ToolManagerServiceAndroid(
     }
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
-    private fun hasLocalNetwork(): Boolean {
+    private fun hasLocalNetwork(): Boolean = getLocalNetworkInfo() != null
+
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
+    private fun getLocalNetworkInfo(): LocalNetworkInfo? {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = cm.activeNetwork ?: return false
-        val caps = cm.getNetworkCapabilities(network) ?: return false
-        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        val network = cm.activeNetwork ?: return null
+        val caps = cm.getNetworkCapabilities(network) ?: return null
+        val transport = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> LocalNetworkInfo.Transport.WIFI
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> LocalNetworkInfo.Transport.ETHERNET
+            else -> return null
+        }
+
+        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val ssid: String?
+        val isOpenNetwork: Boolean?
+        if (transport == LocalNetworkInfo.Transport.WIFI) {
+            // requires location permission on older API levels, otherwise returns "<unknown ssid>"
+            @Suppress("DEPRECATION")
+            val wifiInfo = wifi.connectionInfo
+            ssid = wifiInfo?.ssid?.trim('"')
+            isOpenNetwork = wifiInfo?.isOpen
+        } else {
+            ssid = null
+            isOpenNetwork = null
+        }
+        val ipAddress = runCatching { getWifiAddress(wifi).hostAddress }.getOrNull()
+
+        return LocalNetworkInfo(transport, ssid, ipAddress, isOpenNetwork)
+    }
+
+    private val WifiInfo.isOpen: Boolean? get() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            // no reliable API below API 33 for the security type of the currently connected
+            // network — scan results are best-effort and may not include the active AP
+            return null
+        }
+        return when (currentSecurityType) {
+            WifiInfo.SECURITY_TYPE_OPEN, WifiInfo.SECURITY_TYPE_OWE -> true
+            WifiInfo.SECURITY_TYPE_UNKNOWN -> null
+            else -> false
+        }
     }
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
@@ -122,7 +195,6 @@ class ToolManagerServiceAndroid(
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
             .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
-            .addTransportType(NetworkCapabilities.TRANSPORT_USB)
             .build()
 
         val callback = object : ConnectivityManager.NetworkCallback() {
