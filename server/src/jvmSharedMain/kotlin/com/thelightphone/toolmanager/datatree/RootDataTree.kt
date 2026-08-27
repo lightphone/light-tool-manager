@@ -74,7 +74,7 @@ class RootDataTree(
     // whatever path segments remain unconsumed (the subPath for file ops). Unless showHidden is
     // true, a segment matching an isHidden node is treated the same as a segment that matches
     // nothing.
-    private suspend fun walk(path: Path, showHidden: Boolean = true): Result<Pair<DataView<*>, Path>> {
+    private suspend fun walk(path: Path, showHidden: Boolean = true): Result<Triple<DataView<*>, Path, Path>> {
         awaitRefresh()
         val normalized = path.normalize()
         // Path.of(".").normalize() collapses to empty path
@@ -103,7 +103,9 @@ class RootDataTree(
         }
         val remaining =
             if (i < segments.size) Path.of(segments.drop(i).joinToString("/")) else Path.of(".")
-        return Result.success(node to remaining)
+        val consumed =
+            if (i == 0) Path.of(".") else Path.of(segments.subList(0, i).joinToString("/"))
+        return Result.success(Triple(node, remaining, consumed))
     }
 
     // The immediate children (one level) of whatever page the path resolves to. Fails if the
@@ -111,7 +113,7 @@ class RootDataTree(
     // defaults to false since this is what drives the app's own tree navigation (GET /api/tree) —
     // any other caller that wants hidden branches included can pass showHidden = true explicitly.
     suspend fun getChildrenAt(path: Path, showHidden: Boolean = false): Result<List<DataViewSpec>> {
-        return walk(path, showHidden).mapCatching { (node, remaining) ->
+        return walk(path, showHidden).mapCatching { (node, remaining, _) ->
             val branchNode = node as? BranchView
             if (branchNode == null || remaining.toString() != ".") {
                 throw NoSuchElementException("not a branch: $path")
@@ -130,15 +132,15 @@ class RootDataTree(
 
     private suspend fun <T> withProvider(
         path: Path,
-        block: suspend (LeafDataTree, Path) -> Result<T>
+        block: suspend (LeafDataTree, Path, Path) -> Result<T>
     ): Result<T> {
         return walk(path).fold(
-            onSuccess = { (node, remaining) ->
+            onSuccess = { (node, remaining, consumed) ->
                 val leafNode = node as? LeafView
                 if (leafNode == null) {
                     Result.failure(NoSuchElementException("no data provider for root view"))
                 } else {
-                    block(leafNode.provider, remaining)
+                    block(leafNode.provider, remaining, consumed)
                 }
             },
             onFailure = { Result.failure(it) }
@@ -156,15 +158,16 @@ class RootDataTree(
         invalidateCache: Boolean
     ): Result<PaginatedResponse<Entry>> {
         if (invalidateCache) refreshProviders()
-        val normalized = path.normalize()
-        return withProvider(path) { dataProvider, subPath ->
+        return withProvider(path) { dataProvider, subPath, consumed ->
             dataProvider.getDirectoryForPath(subPath, pageRequest, invalidateCache)
                 .map { response ->
                     response.copy(
                         data = response.data.map { entry ->
-                            // Prefix with the full requested path, not just its first segment,
-                            // so entries below the top level report their real absolute path.
-                            entry.copy(path = "$normalized/${entry.path}")
+                            // Prefix with the leaf's own root path (the part of the request that
+                            // routed us here), not the full requested path
+                            val consumedStr = consumed.toString()
+                            val newPath = if (consumedStr == ".") entry.path else "$consumedStr/${entry.path}"
+                            entry.copy(path = newPath)
                         }
                     )
                 }
@@ -172,31 +175,31 @@ class RootDataTree(
     }
 
     override suspend fun getBytes(filePath: Path): Result<InputStream> {
-        return withProvider(filePath) { dataProvider, subPath ->
+        return withProvider(filePath) { dataProvider, subPath, _ ->
             dataProvider.getBytes(subPath)
         }
     }
 
     override suspend fun getThumbnailBytes(filePath: Path, type: EntryType): Result<InputStream> {
-        return withProvider(filePath) { dataProvider, subPath ->
+        return withProvider(filePath) { dataProvider, subPath, _ ->
             dataProvider.getThumbnailBytes(subPath, type)
         }
     }
 
     override suspend fun notify(directoryPath: Path) {
-        withProvider(directoryPath) { dataProvider, subPath ->
+        withProvider(directoryPath) { dataProvider, subPath, _ ->
             Result.success(dataProvider.notify(subPath))
         }
     }
 
     override suspend fun getDirectoryMeta(directoryPath: Path): Result<DirectoryMeta> {
-        return withProvider(directoryPath) { dataProvider, subPath ->
+        return withProvider(directoryPath) { dataProvider, subPath, _ ->
             dataProvider.getDirectoryMeta(subPath)
         }
     }
 
     override suspend fun checkWrite(filePath: Path): WriteCheck {
-        return withProvider(filePath) { dataProvider, subPath ->
+        return withProvider(filePath) { dataProvider, subPath, _ ->
             Result.success(dataProvider.checkWrite(subPath))
         }.getOrElse { WriteCheck.InvalidPath }
     }
@@ -205,19 +208,19 @@ class RootDataTree(
         filePath: Path,
         block: suspend (OutputStream) -> T
     ): Result<T> {
-        return withProvider(filePath) { dataProvider, subPath ->
+        return withProvider(filePath) { dataProvider, subPath, _ ->
             dataProvider.writeBytes(subPath, block)
         }.also { if (it.isSuccess) invalidateCache() }
     }
 
     override suspend fun delete(filePath: Path): Result<Int> {
-        return withProvider(filePath) { dataProvider, subPath ->
+        return withProvider(filePath) { dataProvider, subPath, _ ->
             dataProvider.delete(subPath)
         }.also { if (it.isSuccess) invalidateCache() }
     }
 
     override suspend fun rename(filePath: Path, newName: String): Result<Boolean> {
-        return withProvider(filePath) { dataProvider, subPath ->
+        return withProvider(filePath) { dataProvider, subPath, _ ->
             dataProvider.rename(subPath, newName)
         }.also { if (it.getOrDefault(false)) invalidateCache() }
     }

@@ -631,6 +631,7 @@ private fun formatLastModified(epochMillis: Long): String =
 
 @Composable
 fun BoxScope.VideoListItem(remote: Remote, entry: Entry) {
+    val durationBackground = Color(0x88CCCCCC)
     AsyncImage(
         model = remote.thumbnailFetcherForEntry(entry, LocalPlatformContext.current),
         contentDescription = entry.title,
@@ -642,7 +643,10 @@ fun BoxScope.VideoListItem(remote: Remote, entry: Entry) {
             it,
             color = MaterialTheme.colorScheme.background,
             fontSize = 20.sp,
-            modifier = Modifier.padding(16.dp).align(Alignment.BottomCenter)
+            modifier = Modifier.padding(8.dp)
+                .background(durationBackground)
+                .padding(8.dp)
+                .align(Alignment.BottomCenter)
         )
     }
 }

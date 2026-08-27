@@ -19,8 +19,6 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Path
-import java.util.Locale
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
 
@@ -118,7 +116,7 @@ class ThumbnailDataTree(
         // if it failed, still populate the cache so we don't keep looking for it
         if (duration == null) return emptyMap()
         return mapOf(
-            MetaKeys.DURATION to duration.format()
+            MetaKeys.DURATION to duration.formatClock()
         )
     }
 
@@ -129,12 +127,3 @@ class ThumbnailDataTree(
         }
     }
 }
-
-private fun Duration.format(locale: Locale = Locale.US): String =
-    toComponents { days, hours, minutes, seconds, _ ->
-        when {
-            days > 0 -> String.format(locale, "%d:%02d:%02d:%02d", days, hours, minutes, seconds)
-            hours > 0 -> String.format(locale, "%02d:%02d:%02d", hours, minutes, seconds)
-            else -> String.format(locale, "%02d:%02d", minutes, seconds)
-        }
-    }

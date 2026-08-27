@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.thelightphone.sdk"
+    namespace = "com.thelightphone.toolmanager"
     compileSdk = 36
     defaultConfig {
         minSdk = 26
