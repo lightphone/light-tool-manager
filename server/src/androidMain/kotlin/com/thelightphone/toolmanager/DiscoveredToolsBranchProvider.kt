@@ -18,7 +18,8 @@ import kotlin.time.Duration.Companion.seconds
 // compatible remote DataTrees
 class DiscoveredToolsBranchProvider(
     private val context: Context,
-    private val logger: Logger
+    private val logger: Logger,
+    private val isPackageAllowed: (String) -> Boolean
 ) : BranchDataTree {
 
     override suspend fun getChildren(): List<DataView<*>> = withContext(Dispatchers.IO) {
@@ -26,6 +27,7 @@ class DiscoveredToolsBranchProvider(
         val authorities = runCatching {
             @Suppress("DEPRECATION")
             pm.getInstalledPackages(PackageManager.GET_PROVIDERS or PackageManager.GET_META_DATA)
+                .filter { isPackageAllowed(it.packageName) }
                 .flatMap { it.providers?.toList().orEmpty() }
                 .filter { it.metaData?.getBoolean(META_DATA_TOOL_MANAGER_PROVIDER, false) == true }
                 .mapNotNull { it.authority }
