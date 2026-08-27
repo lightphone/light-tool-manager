@@ -34,6 +34,21 @@ A few ready-made `DataTree` implementations live under
 `ContentResolver`, see `ContentResolverDataTree`), `EncryptingDataTree` (encrypts small text
 files at rest), and `StaticBranchProvider` (a fixed, precomputed list of children).
 
+## Third-party tools (discovered via LightFileProvider)
+
+A third-party cool can expose its own page(s) in the tree without the server hardcoding anything
+about it. On the client side (see the SDK's `client` module), the tool:
+
+1. Declares a `<provider>` using `com.thelightphone.sdk.LightFileProvider`, with a unique
+   `android:authorities` and a `<meta-data android:name="com.thelightphone.toolmanager.TOOL_MANAGER_PROVIDER" android:value="true" />`
+   tag so the server can find it.
+2. Sets `LightFileProvider.manifest` to a lambda producing a `ClientToolManifest`, which is a serialized version of it's `DataTree`.
+
+`DiscoveredToolsBranchProvider` (Android-only, in this module) scans
+installed packages for that `<meta-data>` tag via `PackageManager`, calls each provider's
+`ContentProvider.call()` to fetch and decode its `ClientToolManifest`, and rebuilds the real
+`DataView` tree by wrapping every leaf in a `ContentResolverDataTree`.
+
 ## Authentication
 
 Every `/api/*` route (except `/api/pair`) requires a signed request — see the interceptor in

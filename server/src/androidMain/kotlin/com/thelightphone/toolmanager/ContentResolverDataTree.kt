@@ -14,24 +14,24 @@ import java.nio.file.Paths
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
-// COLUMN_IS_DIRECTORY / COLUMN_LAST_MODIFIED come from shared/.../LightFileProviderContract.kt,
-// the same constants the client module's LightFileProvider uses to build its cursors.
-
-// NOT YET FULLY TESTED!!
-// Will be used to route requests to third-party tools which use the fileShare
+// Routes requests to a third-party tool's LightFileProvider. Instantiated by
+// DiscoveredToolsBranchProvider, one per leaf declared in that tool's ClientToolManifest.
 class ContentResolverDataTree(
     private val contentResolver: ContentResolver,
     private val authority: String,
+    // Subpath, relative to the provider's own root
+    private val basePath: Path = Paths.get("."),
     readOnly: Boolean = false,
     showHiddenFiles: Boolean = false,
-    cacheTtl: Duration = 5.minutes,
+    cacheTtl: Duration = 30.seconds,
     timeNow: () -> Instant = { Clock.System.now() }
 ) : CachingDataTree(readOnly, showHiddenFiles, cacheTtl, timeNow) {
 
     private fun pathToUri(path: Path): Uri {
-        val pathStr = path.normalize().toString()
+        val pathStr = basePath.resolve(path).normalize().toString()
         val cleanPath = if (pathStr == ".") "" else pathStr
         return Uri.Builder()
             .scheme("content")

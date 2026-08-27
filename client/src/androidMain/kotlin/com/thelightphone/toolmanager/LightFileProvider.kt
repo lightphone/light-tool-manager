@@ -1,4 +1,4 @@
-package com.thelightphone.sdk
+package com.thelightphone.toolmanager
 
 import android.content.ContentProvider
 import android.content.ContentValues
@@ -6,14 +6,17 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
 import android.os.Binder
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
-import com.thelightphone.toolmanager.COLUMN_IS_DIRECTORY
-import com.thelightphone.toolmanager.COLUMN_LAST_MODIFIED
 import java.io.File
 import java.nio.file.Files
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * EXPERIMENTAL
@@ -22,8 +25,28 @@ import java.nio.file.Files
  */
 class LightFileProvider : ContentProvider() {
 
-    internal companion object {
+    companion object {
         const val SHARED_DIR = "shared"
+
+        // Client tool should set this.
+        @Volatile
+        var manifest: () -> ClientToolManifest? = { null }
+
+        // Client tool sets this to react to writes/deletes/renames under its shared/ directory
+        @Volatile
+        var onToolManagerDataUpdate: (() -> Unit)? = null
+
+        @Volatile
+        var dataUpdateDebounceDuration: Duration = 3.seconds
+
+        private val debounceHandler = Handler(Looper.getMainLooper())
+        private val fireChange = Runnable { onToolManagerDataUpdate?.invoke() }
+    }
+
+    private fun notifyChanged() {
+        if (onToolManagerDataUpdate == null) return
+        debounceHandler.removeCallbacks(fireChange)
+        debounceHandler.postDelayed(fireChange, dataUpdateDebounceDuration.inWholeMilliseconds)
     }
 
     // Ensure that client is the SDK server (LightOS)
@@ -57,7 +80,15 @@ class LightFileProvider : ContentProvider() {
             "rw" -> ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_CREATE
             else -> throw IllegalArgumentException("Unsupported mode: $mode")
         }
-        return ParcelFileDescriptor.open(file, pfdMode)
+
+        if (mode == "r") {
+            return ParcelFileDescriptor.open(file, pfdMode)
+        }
+
+        // if file was opened for write, notify when closed
+        return ParcelFileDescriptor.open(file, pfdMode, Handler(Looper.getMainLooper())) { error ->
+            if (error == null) notifyChanged()
+        }
     }
 
     // Two distinct modes, matching how ContentResolverFileTree actually calls this:
@@ -112,12 +143,23 @@ class LightFileProvider : ContentProvider() {
     // Writes go through openFile(mode = "w"/"rw"), not insert()
     override fun insert(uri: Uri, values: ContentValues?): Uri? = null
 
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+        checkCaller()
+        if (method != METHOD_GET_MANIFEST) return null
+        val tree = manifest.invoke() ?: return null
+        return Bundle().apply { putString(RESULT_MANIFEST, tree.encode()) }
+    }
+
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
         checkCaller()
         val file = resolveFile(uri)
+        if (file == root()) {
+            throw SecurityException("Refusing to delete the shared root directory")
+        }
         if (!file.exists()) return 0
         var count = 0
         file.walkBottomUp().forEach { if (it.delete()) count++ }
+        if (count > 0) notifyChanged()
         return count
     }
 
@@ -130,9 +172,14 @@ class LightFileProvider : ContentProvider() {
         checkCaller()
         val newName = values?.getAsString(OpenableColumns.DISPLAY_NAME) ?: return 0
         val file = resolveFile(uri)
+        if (file == root()) {
+            throw SecurityException("Refusing to rename the shared root directory")
+        }
         if (!file.exists()) return 0
         val dest = File(file.parentFile, newName)
         if (dest.exists()) return 0
-        return if (file.renameTo(dest)) 1 else 0
+        val renamed = file.renameTo(dest)
+        if (renamed) notifyChanged()
+        return if (renamed) 1 else 0
     }
 }
