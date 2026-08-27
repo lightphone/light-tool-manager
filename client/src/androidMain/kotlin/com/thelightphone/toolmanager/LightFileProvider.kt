@@ -285,7 +285,7 @@ class LightFileProvider : ContentProvider() {
         checkCaller()
         if (method != METHOD_GET_MANIFEST) return null
         val tree = manifest.invoke() ?: return null
-        ensureLeafDirectoriesExist(tree.root)
+        tree.roots.forEach { ensureLeafDirectoriesExist(it) }
         return Bundle().apply { putString(RESULT_MANIFEST, tree.encode()) }
     }
 

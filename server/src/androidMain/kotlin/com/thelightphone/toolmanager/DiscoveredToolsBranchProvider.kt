@@ -56,7 +56,7 @@ class DiscoveredToolsBranchProvider(
     private fun buildDataView(manifest: ClientToolManifest, authority: String): DataView<*> {
         return BranchView(
             RootViewSpec(manifest.title, path = authority),
-            StaticBranchProvider(listOf(buildDataViewChildren(manifest.root, authority)))
+            StaticBranchProvider(manifest.roots.map { buildDataViewChildren(it, authority) })
         )
     }
 

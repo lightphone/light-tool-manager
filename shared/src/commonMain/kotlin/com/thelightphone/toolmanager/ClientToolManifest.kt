@@ -27,7 +27,7 @@ data class ClientLeafNode(
 @Serializable
 data class ClientToolManifest(
     val title: String,
-    val root: ClientTreeNode
+    val roots: List<ClientTreeNode>
 ) {
     fun encode(): String = Json.encodeToString(serializer(), this)
 
