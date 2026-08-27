@@ -3,7 +3,9 @@ package com.thelightphone.toolmanager
 import android.content.ContentResolver
 import android.content.ContentValues
 import android.net.Uri
+import android.os.Bundle
 import android.provider.OpenableColumns
+import android.util.Size
 import com.thelightphone.toolmanager.datatree.CachingDataTree
 import com.thelightphone.toolmanager.datatree.WriteCheck
 import com.thelightphone.toolmanager.datatree.WriteTarget
@@ -27,6 +29,7 @@ class ContentResolverDataTree(
     readOnly: Boolean = false,
     showHiddenFiles: Boolean = false,
     cacheTtl: Duration = 30.seconds,
+    private val thumbnailSizePx: Int = 512,
     timeNow: () -> Instant = { Clock.System.now() }
 ) : CachingDataTree(readOnly, showHiddenFiles, cacheTtl, timeNow) {
 
@@ -50,6 +53,7 @@ class ContentResolverDataTree(
             val sizeCol = cursor.getColumnIndexOrThrow(OpenableColumns.SIZE)
             val isDirCol = cursor.getColumnIndexOrThrow(COLUMN_IS_DIRECTORY)
             val lastModCol = cursor.getColumnIndexOrThrow(COLUMN_LAST_MODIFIED)
+            val metaCol = cursor.getColumnIndex(COLUMN_META)
             while (cursor.moveToNext()) {
                 val name = cursor.getString(nameCol) ?: continue
                 val isDirectory = cursor.getInt(isDirCol) == 1
@@ -57,6 +61,11 @@ class ContentResolverDataTree(
                 val lastModified = if (cursor.isNull(lastModCol)) 0L else cursor.getLong(lastModCol)
                 val entryPath = if (dirPathStr.isEmpty()) name else "$dirPathStr/$name"
                 val type = if (isDirectory) EntryType.Directory else entryTypeForName(name)
+                val meta = if (metaCol >= 0 && !cursor.isNull(metaCol)) {
+                    runCatching { decodeEntryMeta(cursor.getString(metaCol)) }.getOrNull()
+                } else {
+                    null
+                }
 
                 entries.add(
                     Entry(
@@ -64,7 +73,8 @@ class ContentResolverDataTree(
                         title = name,
                         path = entryPath,
                         lastModified = lastModified,
-                        size = size
+                        size = size,
+                        meta = meta
                     )
                 )
             }
@@ -90,10 +100,19 @@ class ContentResolverDataTree(
     }
 
     override suspend fun getThumbnailBytes(filePath: Path, type: EntryType): Result<InputStream> {
-        return when (type) {
-            EntryType.Image -> getBytes(filePath)
-            else -> Result.failure(UnsupportedOperationException("Thumbnails not supported for $type"))
+        if (type != EntryType.Image && type != EntryType.Video) {
+            return Result.failure(UnsupportedOperationException("Thumbnails not supported for $type"))
         }
+        val thumbnail = runCatching {
+            val uri = pathToUri(filePath)
+            val extras = Bundle().apply {
+                putSize(ContentResolver.EXTRA_SIZE, Size(thumbnailSizePx, thumbnailSizePx))
+            }
+            contentResolver.openTypedAssetFileDescriptor(uri, "image/*", extras, null)?.createInputStream()
+                ?: throw NoSuchElementException("No thumbnail available: $filePath")
+        }
+
+        return if (thumbnail.isSuccess || type == EntryType.Video) thumbnail else getBytes(filePath)
     }
 
     override fun performCheckWrite(filePath: Path): WriteCheck {
