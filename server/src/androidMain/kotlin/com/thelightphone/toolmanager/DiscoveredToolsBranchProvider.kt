@@ -66,7 +66,7 @@ class DiscoveredToolsBranchProvider(
             ContentResolverDataTree(
                 contentResolver = context.contentResolver,
                 authority = authority,
-                basePath = node.resolveBasePath(),
+                basePath = resolveBasePath(node),
                 readOnly = node.readOnly,
                 showHiddenFiles = node.showHiddenFiles
             )
@@ -78,20 +78,21 @@ class DiscoveredToolsBranchProvider(
         )
     }
 
-    // Ensure that a node is only ever writing one level below the root ("files/shared")
-    private fun ClientLeafNode.resolveBasePath(): Path {
-        val candidate = basePath.ifEmpty { spec.path }
-        val normalized = Paths.get(candidate).normalize()
-        val normalizedStr = normalized.toString()
-        if (normalizedStr == "." || normalizedStr.startsWith("..")) {
+    // effectiveBasePath() (shared with the client, which uses it to know which directories to
+    // pre-create) already enforces "never the provider's bare root" — this just adds a log when
+    // that fallback actually kicks in, so a misconfigured manifest is visible somewhere.
+    private fun resolveBasePath(node: ClientLeafNode): Path {
+        val resolved = node.effectiveBasePath()
+        val declaredNormalized = Paths.get(node.basePath.ifEmpty { "." }).normalize().toString()
+        if (node.basePath.isNotEmpty() && resolved.toString() != declaredNormalized) {
             logger.reportError(
                 TAG,
                 null,
-                "Leaf declared invalid basePath '${basePath}, falling back to '${spec.path}'"
+                "Leaf '${node.spec.path}' declared basePath '${node.basePath}' which resolves " +
+                    "to the provider root or outside it; falling back to '${node.spec.path}'"
             )
-            return Paths.get(spec.path).normalize()
         }
-        return normalized
+        return resolved
     }
 
     companion object {

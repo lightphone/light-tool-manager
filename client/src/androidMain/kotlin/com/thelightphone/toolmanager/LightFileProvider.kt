@@ -90,6 +90,15 @@ class LightFileProvider : ContentProvider() {
         return file
     }
 
+    private fun ensureLeafDirectoriesExist(root: ClientTreeNode) {
+        for (relativePath in root.leafBasePaths()) {
+            runCatching {
+                val uri = Uri.Builder().path(relativePath.toString()).build()
+                resolveFile(uri).mkdirs()
+            }
+        }
+    }
+
     private fun mimeTypeOf(file: File): String? =
         MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase())
 
@@ -276,6 +285,7 @@ class LightFileProvider : ContentProvider() {
         checkCaller()
         if (method != METHOD_GET_MANIFEST) return null
         val tree = manifest.invoke() ?: return null
+        ensureLeafDirectoriesExist(tree.root)
         return Bundle().apply { putString(RESULT_MANIFEST, tree.encode()) }
     }
 
