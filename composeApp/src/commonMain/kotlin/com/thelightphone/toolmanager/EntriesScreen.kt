@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -73,6 +74,8 @@ import com.thelightphone.toolmanager.composeapp.generated.resources.ic_reverse_o
 import com.thelightphone.toolmanager.composeapp.generated.resources.ic_trash
 import com.thelightphone.toolmanager.composeapp.generated.resources.ic_text_file
 import com.thelightphone.toolmanager.composeapp.generated.resources.ic_audio_waveform
+import com.thelightphone.toolmanager.composeapp.generated.resources.ic_back_white
+import com.thelightphone.toolmanager.composeapp.generated.resources.ic_video_camera
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.format.MonthNames
@@ -631,23 +634,29 @@ private fun formatLastModified(epochMillis: Long): String =
 
 @Composable
 fun BoxScope.VideoListItem(remote: Remote, entry: Entry) {
-    val durationBackground = Color(0x88CCCCCC)
     AsyncImage(
         model = remote.thumbnailFetcherForEntry(entry, LocalPlatformContext.current),
         contentDescription = entry.title,
         modifier = Modifier.fillMaxSize(),
         contentScale = ContentScale.Crop
     )
+
     entry.meta?.get(MetaKeys.DURATION)?.let {
-        Text(
-            it,
-            color = MaterialTheme.colorScheme.background,
-            fontSize = 20.sp,
-            modifier = Modifier.padding(8.dp)
-                .background(durationBackground)
-                .padding(8.dp)
-                .align(Alignment.BottomCenter)
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.align(Alignment.BottomStart)
+                .padding(20.dp)
+                .background(MaterialTheme.colorScheme.primary)
+                .padding(vertical = 6.dp, horizontal = 8.dp)
+        ) {
+            Icon(
+                painter = painterResource(Res.drawable.ic_video_camera),
+                tint = MaterialTheme.colorScheme.background,
+                contentDescription = "video camera icon"
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(it, color = MaterialTheme.colorScheme.background, fontSize = 14.sp)
+        }
     }
 }
 
@@ -659,11 +668,13 @@ fun BoxScope.FileListItem(entry: Entry) {
             else -> Res.drawable.ic_text_file to "Generic file icon"
         }
         Spacer(Modifier.height(12.dp))
-        Image(
-            vectorResource(resource),
-            contentDescription = contentDescription,
-            Modifier.fillMaxSize(0.65f)
-        )
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize(0.65f)) {
+            Image(
+                vectorResource(resource),
+                contentDescription = contentDescription,
+                Modifier.fillMaxSize(0.60f)
+            )
+        }
         Column(
             modifier = Modifier.fillMaxWidth().weight(1f)
                 .padding(horizontal = 14.dp, vertical = 6.dp)
