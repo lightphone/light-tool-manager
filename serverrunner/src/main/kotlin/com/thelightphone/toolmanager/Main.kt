@@ -4,8 +4,10 @@ import com.thelightphone.toolmanager.datatree.CustomDataTree
 import com.thelightphone.toolmanager.datatree.RootDataTree
 import com.thelightphone.toolmanager.datatree.StaticBranchProvider
 import io.ktor.http.ContentType
-import io.ktor.server.engine.*
-import io.ktor.server.netty.*
+import io.ktor.server.engine.connector
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.engine.sslConnector
+import io.ktor.server.netty.Netty
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
@@ -39,11 +41,11 @@ fun main() {
         DesktopDataTree(allDirs, uploadsDir)
     )
 
-    val uploadsDropBox = LeafView(
-        DropboxSpec(
-            "Uploads Dropbox",
+    val uploadsInbox = LeafView(
+        UploadSpec(
+            "Uploads Inbox",
             uploadsDir.name,
-            headerText = "This is the Uploads Dropbox\n" +
+            headerText = "This is the Uploads Inbox\n" +
                     "\n" +
                     "When you upload here, your files will show in the Uploads directory!",
             buttonText = "Click Here to Upload"
@@ -52,7 +54,7 @@ fun main() {
     )
 
     val export = LeafView(
-        ExportSpec(
+        DownloadSpec(
             "Export Greeting",
             "export",
             "hello.txt",
@@ -62,11 +64,11 @@ fun main() {
         DesktopDataTree(resourceRoot.resolve("Text"))
     )
 
-    val hiddenDropbox = LeafView(
-        DropboxSpec(
+    val hiddenInbox = LeafView(
+        UploadSpec(
             "You Shouldn't See This",
             uploadsDir.name,
-            headerText = "This is the HIDDEN Uploads Dropbox\n" +
+            headerText = "This is the HIDDEN Uploads Inbox\n" +
                     "\n" +
                     "When you upload here, your files will show in the Uploads directory!",
             buttonText = "Click Here to Upload"
@@ -89,7 +91,7 @@ fun main() {
         BranchView(
             RootViewSpec("root", ""),
             StaticBranchProvider(
-                perDirViews + combinedView + uploadsDropBox + hiddenDropbox + customDataEndpoint + export
+                perDirViews + combinedView + uploadsInbox + hiddenInbox + customDataEndpoint + export
             )
         )
     }

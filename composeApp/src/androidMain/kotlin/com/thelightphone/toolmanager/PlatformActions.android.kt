@@ -11,6 +11,10 @@ actual fun getBaseUrl(): String = "http://10.0.2.2:8080"
 
 actual fun triggerDownload(url: String) {}
 
+actual fun navigateToExternalUrl(url: String) {}
+
+actual fun consumeResumeJobParams(): Pair<String, String>? = null
+
 actual fun pushBrowserState(path: String?) {}
 
 actual fun onBrowserBack(handler: (path: String?) -> Unit) {}

@@ -224,4 +224,44 @@ class RootDataTree(
             dataProvider.rename(subPath, newName)
         }.also { if (it.getOrDefault(false)) invalidateCache() }
     }
+
+    // Resolves `path` and starts a job on whichever provider it lands on. The provider owns
+    // everything about actually running the job and about remembering it under the id it returns.
+    override suspend fun startJob(
+        path: Path,
+        params: Map<String, String>,
+        selfOrigin: String,
+        mintCallbackState: (jobId: String) -> String
+    ): Result<JobStart> {
+        return withProvider(path) { dataProvider, subPath, _ ->
+            dataProvider.startJob(subPath, params, selfOrigin, mintCallbackState)
+        }
+    }
+
+    // Re-resolves `path` (no registry kept here - the provider reached by walking `path` is always
+    // asked fresh) and asks it for jobId's status. A Succeeded result's resultPath gets re-prefixed
+    // with the path segments consumed to reach that provider, the same way every other method here
+    // re-prefixes Entry.path, so it comes back resolvable from the root. A path that doesn't
+    // resolve at all is treated the same as an unrecognized jobId: NotFound.
+    override suspend fun getJobStatus(path: Path, jobId: String): JobStatus {
+        return withProvider(path) { dataProvider, subPath, consumed ->
+            val status = dataProvider.getJobStatus(subPath, jobId)
+            val resultPath = (status as? JobStatus.Succeeded)?.resultPath
+            val prefixed = if (status is JobStatus.Succeeded && resultPath != null) {
+                val consumedStr = consumed.toString()
+                val fullPath = if (consumedStr == ".") resultPath else Path.of("$consumedStr/$resultPath")
+                status.copy(resultPath = fullPath)
+            } else {
+                status
+            }
+            Result.success(prefixed)
+        }.getOrElse { JobStatus.NotFound }
+    }
+
+    // Re-resolves `path` and hands the callback data to whichever provider owns it.
+    override suspend fun completeJob(path: Path, jobId: String, data: Map<String, String>): Result<Unit> {
+        return withProvider(path) { dataProvider, subPath, _ ->
+            dataProvider.completeJob(subPath, jobId, data)
+        }
+    }
 }

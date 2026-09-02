@@ -41,18 +41,18 @@ data class FileBrowserSpec(
 }
 
 @Serializable
-data class DropboxSpec(
+data class UploadSpec(
     override val label: String,
     override val path: String,
     override val headerText: String? = null,
     val buttonText: String
 ) :
     LeafViewSpec() {
-    override fun withPathPrefix(prefix: String) = DropboxSpec(label, joinPath(prefix, path), headerText, buttonText)
+    override fun withPathPrefix(prefix: String) = UploadSpec(label, joinPath(prefix, path), headerText, buttonText)
 }
 
 @Serializable
-data class ExportSpec(
+data class DownloadSpec(
     override val label: String,
     override val path: String,
     val resourceSubPath: String, // the thing to get downloaded
@@ -60,9 +60,20 @@ data class ExportSpec(
     val buttonText: String
 ) :
     LeafViewSpec() {
-    override fun withPathPrefix(prefix: String) = ExportSpec(label, joinPath(prefix, path), resourceSubPath, headerText, buttonText)
+    override fun withPathPrefix(prefix: String) = DownloadSpec(label, joinPath(prefix, path), resourceSubPath, headerText, buttonText)
 
     val resourceFullPath get() = joinPath(path, resourceSubPath)
+}
+
+@Serializable
+data class JobSpec(
+    override val label: String,
+    override val path: String,
+    override val headerText: String? = null,
+    val buttonText: String
+) :
+    LeafViewSpec() {
+    override fun withPathPrefix(prefix: String) = JobSpec(label, joinPath(prefix, path), headerText, buttonText)
 }
 
 @Serializable

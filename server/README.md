@@ -23,8 +23,9 @@ Specs come in a few flavors ([DataViewSpec.kt](../shared/src/commonMain/kotlin/c
 
 - **`RootViewSpec`** — the top of the tree, always paired with a branch.
 - **`FileBrowserSpec`** — a standard file browser page (list/upload/download/delete).
-- **`DropboxSpec`** — a single upload target, no browsing.
-- **`ExportSpec`** — a single download target, no browsing.
+- **`UploadSpec`** — a single upload target, no browsing.
+- **`DownloadSpec`** — a single download target, no browsing.
+- **`JobSpec`** — a place to kick off some arbitrary async work.
 - **`CustomSpec`** — a raw data endpoint for a tool that wants to fetch/post its own payloads
   instead of using the file browser UI. Always hidden from tree navigation - they don't display any UI.
 

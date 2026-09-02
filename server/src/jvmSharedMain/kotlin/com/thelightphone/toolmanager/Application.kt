@@ -1,5 +1,6 @@
 package com.thelightphone.toolmanager
 
+import com.thelightphone.toolmanager.datatree.JobStatus
 import com.thelightphone.toolmanager.datatree.LeafDataTree
 import com.thelightphone.toolmanager.datatree.RootDataTree
 import com.thelightphone.toolmanager.datatree.WriteCheck
@@ -9,6 +10,7 @@ import io.ktor.server.application.*
 import io.ktor.server.http.content.*
 import io.ktor.server.plugins.calllogging.*
 import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.origin
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -21,6 +23,7 @@ import org.slf4j.Marker
 import org.slf4j.event.Level
 import org.slf4j.helpers.AbstractLogger
 import java.io.ByteArrayOutputStream
+import java.net.URLEncoder
 import java.nio.file.Path
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -54,11 +57,15 @@ data class PairResponse(val key: String)
 private const val TAG = "ToolManagerServer"
 private const val PairPath = "/api/pair"
 
+// Public (not private) since individual job implementations need it to build their own callback
+// URLs around the state minted for them - see LeafDataTree.startJob's mintCallbackState param.
+const val JobCallbackPath = "/api/job-callback"
+
 fun Application.module(
     rootDataProvider: RootDataTree,
     enableLogging: Boolean,
     toolManagerLogger: Logger,
-    auth: ToolManagerAuth? = null
+    auth: ToolManagerAuth? = null,
 ) {
 
     install(ContentNegotiation) {
@@ -114,15 +121,23 @@ fun Application.module(
         intercept(ApplicationCallPipeline.Plugins) {
             val path = call.request.path()
             // /api/pair is deliberately excluded: a device pairing via a totp code has no key
-            // yet, so it has to be reachable without one.
-            if (path.startsWith("/api/") && path != PairPath) {
+            // yet, so it has to be reachable without one. /api/job-callback is excluded for a
+            // different reason: it's meant to be hit by a third party's browser redirect (e.g. an
+            // OAuth callback), which can't attach our signature at all. It's protected instead by
+            // its own signed, path-bound `state` token - see JobCallbackState.kt.
+            if (path.startsWith("/api/") && path != PairPath && path != JobCallbackPath) {
                 val signature = call.request.header(SignatureHeader)
                     ?: call.request.queryParameters[SignatureQueryParam]
                 val timestamp = (call.request.header(TimestampHeader)
                     ?: call.request.queryParameters[TimestampQueryParam])?.toLongOrNull()
 
                 val valid = signature != null && timestamp != null &&
-                    auth.verifySignature(call.request.httpMethod.value, path, timestamp, signature)
+                        auth.verifySignature(
+                            call.request.httpMethod.value,
+                            path,
+                            timestamp,
+                            signature
+                        )
 
                 if (!valid) {
                     call.respond(HttpStatusCode.Unauthorized)
@@ -368,6 +383,104 @@ fun Application.module(
             )
         }
 
+        // Starts a job
+        // jobs are DataTree-defined arbitrary async tasks
+        post("/api/job/{path...}") {
+            val filePath = call.parameters.getAll("path")?.joinToString("/")
+            if (filePath == null) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse("MISSING_PATH", "Missing path")
+                )
+                return@post
+            }
+
+            val params =
+                runCatching { call.receive<JobStartRequest>() }.getOrNull()?.params ?: emptyMap()
+            val selfOrigin = call.originUrl()
+            rootDataProvider.startJob(Path.of(filePath), params, selfOrigin) { jobId ->
+                mintJobCallbackState(auth, filePath, origin = selfOrigin, jobId = jobId)
+            }.fold(
+                onSuccess = { jobStart ->
+                    call.respond(
+                        HttpStatusCode.Accepted,
+                        JobStartResponse(jobStart.jobId, jobStart.redirectUrl)
+                    )
+                },
+                onFailure = { call.respondError(it) }
+            )
+        }
+
+        // Polls job status
+        get("/api/job/{path...}") {
+            val filePath = call.parameters.getAll("path")?.joinToString("/")
+            val jobId = call.request.queryParameters["jobId"]
+            if (filePath == null || jobId == null) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse("MISSING_PARAMETERS", "Missing path or jobId")
+                )
+                return@get
+            }
+
+            when (val status = rootDataProvider.getJobStatus(Path.of(filePath), jobId)) {
+                JobStatus.NotFound -> call.respond(
+                    HttpStatusCode.NotFound,
+                    ErrorResponse("JOB_NOT_FOUND", "Job not found")
+                )
+
+                JobStatus.Pending -> call.respond(
+                    HttpStatusCode.OK,
+                    JobStatusResponse(jobId, JobState.PENDING)
+                )
+
+                JobStatus.Running -> call.respond(
+                    HttpStatusCode.OK,
+                    JobStatusResponse(jobId, JobState.RUNNING)
+                )
+
+                is JobStatus.Succeeded -> call.respond(
+                    HttpStatusCode.OK,
+                    JobStatusResponse(
+                        jobId,
+                        JobState.SUCCEEDED,
+                        message = status.message,
+                        resultPath = status.resultPath?.toString()
+                    )
+                )
+
+                is JobStatus.Failed -> call.respond(
+                    HttpStatusCode.OK,
+                    JobStatusResponse(jobId, JobState.FAILED, message = status.message)
+                )
+            }
+        }
+
+        // OAuth-style callback target for jobs that redirect out to a remote party (see
+        // startJob's mintCallbackState param). All routing/signing is bundled in the state object.
+        get(JobCallbackPath) {
+            val state = call.request.queryParameters["state"]
+            val target = state?.let { verifyJobCallbackState(auth, it) }
+            if (target == null) {
+                call.respondText(
+                    "This link is invalid or has expired.",
+                    ContentType.Text.Plain,
+                    HttpStatusCode.Unauthorized
+                )
+                return@get
+            }
+
+            val data = call.request.queryParameters.entries()
+                .filter { (key, _) -> key != "state" }
+                .associate { (key, values) -> key to values.firstOrNull().orEmpty() }
+
+            // completeJob's own success/failure doesn't change where the browser goes - either
+            // way it lands back on the job's own screen in the app, which finds out via the
+            // normal status poll.
+            rootDataProvider.completeJob(Path.of(target.path), target.jobId, data)
+            call.respondRedirect(call.buildJobResumeUrl(target.path, target.jobId))
+        }
+
         // Bulk download: create token
         post("/api/download") {
             val downloadRequest = call.receive<DownloadRequest>()
@@ -435,6 +548,33 @@ private suspend fun ApplicationCall.respondError(error: Throwable) {
         else -> HttpStatusCode.InternalServerError to "INTERNAL_ERROR"
     }
     respond(status, ErrorResponse(code, error.message ?: "Unknown error"))
+}
+
+// This device's own scheme://host:port, e.g. as embedded (signed) into a job callback's state so
+// /api/job-callback knows which provider started it, or as the base of a job-resume redirect.
+private fun ApplicationCall.originUrl(): String {
+    val origin = request.origin
+    val hostPort = if ((origin.scheme == "http" && origin.serverPort == 80) ||
+        (origin.scheme == "https" && origin.serverPort == 443)
+    ) {
+        origin.serverHost
+    } else {
+        "${origin.serverHost}:${origin.serverPort}"
+    }
+    return "${origin.scheme}://$hostPort"
+}
+
+// Where the browser lands after the callback - back at the app's root, with the job's own path
+// and jobId as query params (not the URL hash: the app's bootstrap already overloads a non-empty
+// hash on first load to mean "this is a pairing key", so reusing it here would clobber the
+// already-paired session's key). App.kt reads and strips these on startup, resolves them back to
+// the JobSpec that was in flight, and resumes polling that jobId - completeJob's own outcome
+// doesn't change where we send the browser, since the app finds out success vs failure the same
+// way it would have if the tab had stayed open the whole time: by polling.
+private fun ApplicationCall.buildJobResumeUrl(filePath: String, jobId: String): String {
+    val encodedPath = URLEncoder.encode(filePath, "UTF-8")
+    val encodedJobId = URLEncoder.encode(jobId, "UTF-8")
+    return "${originUrl()}/?resumeJob=$encodedPath&jobId=$encodedJobId"
 }
 
 private const val ZIP_STREAM_CHUNK_SIZE = 32768

@@ -19,14 +19,17 @@ one to a template based on its type.
 
   ![File browser template](.docs/browser_template.png)
 
-- **`DropboxSpec`** → [`DropBoxScreen`](src/commonMain/kotlin/com/thelightphone/toolmanager/DropBoxScreen.kt) —
+- **`UploadSpec`** → [`UploadScreen`](src/commonMain/kotlin/com/thelightphone/toolmanager/UploadScreen.kt) —
   A single upload target. Just a description and a button.
 
-  ![Dropbox template](.docs/dropbox_template.png)
+  ![Upload template](.docs/dropbox_template.png)
 
-- **`ExportSpec`** → [`ExportScreen`](src/commonMain/kotlin/com/thelightphone/toolmanager/ExportScreen.kt) —
-  A single download target (`resourceFullPath`). The mirror image of `DropboxSpec`.
+- **`DownloadSpec`** → [`DownloadScreen`](src/commonMain/kotlin/com/thelightphone/toolmanager/DownloadScreen.kt) —
+  A single download target (`resourceFullPath`). The mirror image of `UploadSpec`.
 
   ![Export template](.docs/export_template.png)
+
+- **`JobSpec`** -> [`JobScreen`](src/commonMain/kotlin/com/thelightphone/toolmanager/JobScreen.kt) —
+  A place to kick off some arbitrary async work. When the button is hit, the job will be kicked off, and the frontend will poll its status until completion/failure.
 
 - **`CustomSpec`** → No UI, this is for fetching data directly from the api.

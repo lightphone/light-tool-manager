@@ -32,6 +32,30 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
+// Client tool implements this to support jobs (see JobSpec) at any of its declared leaf paths -
+// mirrors LeafDataTree.startJob/getJobStatus/completeJob on the server side (see that interface's
+// doc comments in the server module for the full contract). Plain (non-suspend) methods, since
+// call() is a synchronous Binder call: a job whose work takes a while should launch it in the
+// tool's own scope and return quickly, exactly like every other startJob implementation - not
+// block this call waiting for it to finish.
+interface LightFileProviderJobs {
+    // jobId is already minted by the server; the tool only needs to remember it (correlated with
+    // whatever async work it kicks off) so later getJobStatus/completeJob calls carrying the same
+    // id can find it again. callbackUrl, if non-null, is a ready-to-use URL this tool can embed as
+    // the redirect_uri of an external OAuth-style authorize URL it returns as
+    // JobStartResponse.redirectUrl. Return null to reject (path isn't job-capable, or params don't
+    // make sense) - ContentResolverDataTree maps that to "jobs not supported here".
+    fun startJob(path: String, jobId: String, params: Map<String, String>, callbackUrl: String?): JobStartResponse?
+
+    // Reports a job's status by id. Return null for an unrecognized jobId (maps to
+    // JobStatus.NotFound), same as every other job-status implementation in this codebase.
+    fun getJobStatus(path: String, jobId: String): JobStatusResponse?
+
+    // Completes a job whose remaining work happened out-of-band - e.g. an OAuth callback - `data`
+    // is whatever arbitrary data that callback carried. Return true if accepted.
+    fun completeJob(path: String, jobId: String, data: Map<String, String>): Boolean
+}
+
 /**
  * EXPERIMENTAL
  * Exposes this tools's `<filesDir>/shared` directory to the ToolManager server's
@@ -49,6 +73,10 @@ class LightFileProvider : ContentProvider() {
         // Client tool sets this to react to writes/deletes/renames under its shared/ directory
         @Volatile
         var onToolManagerDataUpdate: (() -> Unit)? = null
+
+        // Client tool sets this to support jobs (see JobSpec) at any of its declared leaf paths.
+        @Volatile
+        var jobs: LightFileProviderJobs? = null
 
         @Volatile
         var dataUpdateDebounceDuration: Duration = 3.seconds
@@ -283,10 +311,39 @@ class LightFileProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         checkCaller()
-        if (method != METHOD_GET_MANIFEST) return null
-        val tree = manifest.invoke() ?: return null
-        tree.roots.forEach { ensureLeafDirectoriesExist(it) }
-        return Bundle().apply { putString(RESULT_MANIFEST, tree.encode()) }
+        return when (method) {
+            METHOD_GET_MANIFEST -> {
+                val tree = manifest.invoke() ?: return null
+                tree.roots.forEach { ensureLeafDirectoriesExist(it) }
+                Bundle().apply { putString(RESULT_MANIFEST, tree.encode()) }
+            }
+
+            METHOD_START_JOB -> {
+                val path = arg ?: return null
+                val jobId = extras?.getString(EXTRA_JOB_ID) ?: return null
+                val params = extras.getString(EXTRA_PARAMS)?.let { decodeStringMap(it) }.orEmpty()
+                val callbackUrl = extras.getString(EXTRA_CALLBACK_URL)
+                val response = jobs?.startJob(path, jobId, params, callbackUrl) ?: return null
+                Bundle().apply { putString(RESULT_JOB_START, response.encode()) }
+            }
+
+            METHOD_JOB_STATUS -> {
+                val path = arg ?: return null
+                val jobId = extras?.getString(EXTRA_JOB_ID) ?: return null
+                val response = jobs?.getJobStatus(path, jobId) ?: return null
+                Bundle().apply { putString(RESULT_JOB_STATUS, response.encode()) }
+            }
+
+            METHOD_COMPLETE_JOB -> {
+                val path = arg ?: return null
+                val jobId = extras?.getString(EXTRA_JOB_ID) ?: return null
+                val data = extras.getString(EXTRA_DATA)?.let { decodeStringMap(it) }.orEmpty()
+                val accepted = jobs?.completeJob(path, jobId, data) ?: false
+                Bundle().apply { putBoolean(RESULT_COMPLETE_JOB_SUCCESS, accepted) }
+            }
+
+            else -> null
+        }
     }
 
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {

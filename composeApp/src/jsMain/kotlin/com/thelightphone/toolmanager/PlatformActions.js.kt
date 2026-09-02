@@ -37,6 +37,21 @@ actual fun triggerDownload(url: String) {
     document.body?.removeChild(link)
 }
 
+actual fun navigateToExternalUrl(url: String) {
+    window.location.href = url
+}
+
+actual fun consumeResumeJobParams(): Pair<String, String>? {
+    val search = window.location.search
+    if (search.isEmpty() || search == "?") return null
+    val params = js("new URLSearchParams(search)")
+    val path = params.get("resumeJob") as String?
+    val jobId = params.get("jobId") as String?
+    if (path == null || jobId == null) return null
+    window.history.replaceState(null, "", window.location.pathname + window.location.hash)
+    return path to jobId
+}
+
 actual fun pushBrowserState(path: String?) {
     val hash = if (path != null) "#$path" else "#"
     window.history.pushState(null, "", hash)

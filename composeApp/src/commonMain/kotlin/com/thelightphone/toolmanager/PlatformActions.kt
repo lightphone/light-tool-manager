@@ -9,6 +9,17 @@ expect fun getBaseUrl(): String
 
 expect fun triggerDownload(url: String)
 
+// Full-page navigation to an external URL (e.g. a job's OAuth-style redirectUrl) - not a download,
+// not an in-app route change.
+expect fun navigateToExternalUrl(url: String)
+
+// Reads and clears the one-shot ?resumeJob=<path>&jobId=<id> query params a job-callback redirect
+// (see JobCallbackPath in Application.kt) lands the browser on, returning (path, jobId) if
+// present. Not the URL hash: the app's pairing bootstrap already overloads a non-empty hash on
+// first load to mean "this is a pairing key" (see getApiKey), so reusing it here would clobber an
+// already-paired session's key on every callback-driven reload.
+expect fun consumeResumeJobParams(): Pair<String, String>?
+
 // path is null for root, non-null for a directory
 expect fun pushBrowserState(path: String?)
 

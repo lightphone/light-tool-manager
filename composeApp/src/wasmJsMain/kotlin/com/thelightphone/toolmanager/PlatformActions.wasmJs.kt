@@ -15,6 +15,35 @@ private external fun triggerDownloadJs(url: String)
 
 actual fun triggerDownload(url: String) = triggerDownloadJs(url)
 
+actual fun navigateToExternalUrl(url: String) {
+    window.location.href = url
+}
+
+// Returns an empty string if either param is absent, otherwise "PATH\nJOBID" - a newline
+// separator, since URL query param values can't themselves contain a raw newline. One external JS
+// call instead of two separate ones for path/jobId that could observe the URL differently if
+// something mutated it in between.
+@JsFun(
+    """
+    function() {
+        var params = new URLSearchParams(window.location.search);
+        var path = params.get('resumeJob');
+        var jobId = params.get('jobId');
+        if (!path || !jobId) return '';
+        window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+        return path + '\n' + jobId;
+    }
+    """
+)
+private external fun consumeResumeJobParamsJs(): String
+
+actual fun consumeResumeJobParams(): Pair<String, String>? {
+    val raw = consumeResumeJobParamsJs()
+    if (raw.isEmpty()) return null
+    val (path, jobId) = raw.split('\n', limit = 2)
+    return path to jobId
+}
+
 actual fun pushBrowserState(path: String?) {
     val hash = if (path != null) "#$path" else "#"
     window.history.pushState(null, "", hash)
