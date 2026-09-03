@@ -90,14 +90,11 @@ fun JobScreen(
             isBusy = true
             remote.startJob(spec.path).fold(
                 onSuccess = { jobStart ->
-                    val redirectUrl = jobStart.redirectUrl
-                    if (redirectUrl != null) {
-                        // Full-page navigation away, so isBusy staying true (and this composable
-                        // never getting torn down cleanly) doesn't matter.
-                        navigateToExternalUrl(redirectUrl)
-                    } else {
-                        pollUntilDone(jobStart.jobId)
-                    }
+                    // navigateToExternalUrl opens a new tab rather than navigating this one away,
+                    // so this tab is never torn down - poll for completion here regardless of
+                    // whether a redirect happened, same as a job with no remote leg at all.
+                    jobStart.redirectUrl?.let { navigateToExternalUrl(it) }
+                    pollUntilDone(jobStart.jobId)
                 },
                 onFailure = {
                     isBusy = false

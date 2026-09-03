@@ -38,7 +38,7 @@ actual fun triggerDownload(url: String) {
 }
 
 actual fun navigateToExternalUrl(url: String) {
-    window.location.href = url
+    window.open(url, "_blank")
 }
 
 actual fun consumeResumeJobParams(): Pair<String, String>? {

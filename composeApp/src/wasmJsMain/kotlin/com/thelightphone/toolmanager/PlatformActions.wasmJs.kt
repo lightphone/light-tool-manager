@@ -16,7 +16,7 @@ private external fun triggerDownloadJs(url: String)
 actual fun triggerDownload(url: String) = triggerDownloadJs(url)
 
 actual fun navigateToExternalUrl(url: String) {
-    window.location.href = url
+    window.open(url, "_blank")
 }
 
 // Returns an empty string if either param is absent, otherwise "PATH\nJOBID" - a newline
