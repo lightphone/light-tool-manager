@@ -14,9 +14,8 @@ expect fun navigateToExternalUrl(url: String)
 
 // Reads and clears the one-shot ?resumeJob=<path>&jobId=<id> query params a job-callback redirect
 // (see JobCallbackPath in Application.kt) lands the browser on, returning (path, jobId) if
-// present. Not the URL hash: the app's pairing bootstrap already overloads a non-empty hash on
-// first load to mean "this is a pairing key" (see getApiKey), so reusing it here would clobber an
-// already-paired session's key on every callback-driven reload.
+// present.
+// TODO probably want more generic deep linking
 expect fun consumeResumeJobParams(): Pair<String, String>?
 
 // path is null for root, non-null for a directory

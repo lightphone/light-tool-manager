@@ -56,9 +56,6 @@ data class PairResponse(val key: String)
 
 private const val TAG = "ToolManagerServer"
 private const val PairPath = "/api/pair"
-
-// Public (not private) since individual job implementations need it to build their own callback
-// URLs around the state minted for them - see LeafDataTree.startJob's mintCallbackState param.
 const val JobCallbackPath = "/api/job-callback"
 
 fun Application.module(
@@ -121,10 +118,8 @@ fun Application.module(
         intercept(ApplicationCallPipeline.Plugins) {
             val path = call.request.path()
             // /api/pair is deliberately excluded: a device pairing via a totp code has no key
-            // yet, so it has to be reachable without one. /api/job-callback is excluded for a
-            // different reason: it's meant to be hit by a third party's browser redirect (e.g. an
-            // OAuth callback), which can't attach our signature at all. It's protected instead by
-            // its own signed, path-bound `state` token - see JobCallbackState.kt.
+            // yet, so it has to be reachable without one.
+            // /api/job-callback is hit by a third party's browser redirect (OAuth callback, etc)
             if (path.startsWith("/api/") && path != PairPath && path != JobCallbackPath) {
                 val signature = call.request.header(SignatureHeader)
                     ?: call.request.queryParameters[SignatureQueryParam]
@@ -564,13 +559,7 @@ private fun ApplicationCall.originUrl(): String {
     return "${origin.scheme}://$hostPort"
 }
 
-// Where the browser lands after the callback - back at the app's root, with the job's own path
-// and jobId as query params (not the URL hash: the app's bootstrap already overloads a non-empty
-// hash on first load to mean "this is a pairing key", so reusing it here would clobber the
-// already-paired session's key). App.kt reads and strips these on startup, resolves them back to
-// the JobSpec that was in flight, and resumes polling that jobId - completeJob's own outcome
-// doesn't change where we send the browser, since the app finds out success vs failure the same
-// way it would have if the tab had stayed open the whole time: by polling.
+// for deep-linking to an already running job
 private fun ApplicationCall.buildJobResumeUrl(filePath: String, jobId: String): String {
     val encodedPath = URLEncoder.encode(filePath, "UTF-8")
     val encodedJobId = URLEncoder.encode(jobId, "UTF-8")

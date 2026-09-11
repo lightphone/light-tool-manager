@@ -225,8 +225,6 @@ class RootDataTree(
         }.also { if (it.getOrDefault(false)) invalidateCache() }
     }
 
-    // Resolves `path` and starts a job on whichever provider it lands on. The provider owns
-    // everything about actually running the job and about remembering it under the id it returns.
     override suspend fun startJob(
         path: Path,
         params: Map<String, String>,
@@ -238,14 +236,10 @@ class RootDataTree(
         }
     }
 
-    // Re-resolves `path` (no registry kept here - the provider reached by walking `path` is always
-    // asked fresh) and asks it for jobId's status. A Succeeded result's resultPath gets re-prefixed
-    // with the path segments consumed to reach that provider, the same way every other method here
-    // re-prefixes Entry.path, so it comes back resolvable from the root. A path that doesn't
-    // resolve at all is treated the same as an unrecognized jobId: NotFound.
     override suspend fun getJobStatus(path: Path, jobId: String): JobStatus {
         return withProvider(path) { dataProvider, subPath, consumed ->
             val status = dataProvider.getJobStatus(subPath, jobId)
+            // job results are files, which can be read after
             val resultPath = (status as? JobStatus.Succeeded)?.resultPath
             val prefixed = if (status is JobStatus.Succeeded && resultPath != null) {
                 val consumedStr = consumed.toString()

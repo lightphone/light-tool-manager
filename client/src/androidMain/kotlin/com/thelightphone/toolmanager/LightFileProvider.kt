@@ -32,16 +32,10 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-// Client tool implements this to support jobs (see JobSpec) at any of its declared leaf paths -
-// mirrors LeafDataTree.startJob/getJobStatus/completeJob on the server side (see that interface's
-// doc comments in the server module for the full contract). Plain (non-suspend) methods, since
-// call() is a synchronous Binder call: a job whose work takes a while should launch it in the
-// tool's own scope and return quickly, exactly like every other startJob implementation - not
-// block this call waiting for it to finish.
+// client-provided obj for keeping track of jobs. Jobs may be completed from behind the scenes
+// or via the public completeJob method
 interface LightFileProviderJobs {
-    // jobId is already minted by the server; the tool only needs to remember it (correlated with
-    // whatever async work it kicks off) so later getJobStatus/completeJob calls carrying the same
-    // id can find it again. callbackUrl, if non-null, is a ready-to-use URL this tool can embed as
+    // callbackUrl (optional)  is a ready-to-use URL this tool can embed as
     // the redirect_uri of an external OAuth-style authorize URL it returns as
     // JobStartResponse.redirectUrl. Return null to reject (path isn't job-capable, or params don't
     // make sense) - ContentResolverDataTree maps that to "jobs not supported here".
@@ -66,7 +60,7 @@ class LightFileProvider : ContentProvider() {
     companion object {
         const val SHARED_DIR = "shared"
 
-        // Client tool should set this.
+        // Client tool should set this (sdk client library adds a way to provide this via the tool EntryPoint)
         @Volatile
         var manifest: () -> ClientToolManifest? = { null }
 
@@ -175,15 +169,22 @@ class LightFileProvider : ContentProvider() {
         }
         val sizePx = extractSizePx(opts)
         val bytes = cachedThumbnail(file, sizePx)
-            ?: throw FileNotFoundException("Could not generate a thumbnail for: $uri")
+        if (bytes != null) {
+            // Write-then-unlink: the fd keeps the underlying inode readable after delete(), so
+            // this leaves no temp file behind without needing pipe/thread plumbing for a
+            // one-shot JPEG.
+            val tempFile = File.createTempFile("thumb", ".jpg", context!!.cacheDir)
+            tempFile.writeBytes(bytes)
+            val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY)
+            tempFile.delete()
+            return AssetFileDescriptor(pfd, 0, bytes.size.toLong())
+        }
 
-        // Write-then-unlink: the fd keeps the underlying inode readable after delete(), so this
-        // leaves no temp file behind without needing pipe/thread plumbing for a one-shot JPEG.
-        val tempFile = File.createTempFile("thumb", ".jpg", context!!.cacheDir)
-        tempFile.writeBytes(bytes)
-        val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY)
-        tempFile.delete()
-        return AssetFileDescriptor(pfd, 0, bytes.size.toLong())
+        // "*/*" means the caller will accept the asset as-is, thumbnail not required
+        if (mimeTypeFilter == "*/*") {
+            return AssetFileDescriptor(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY), 0, file.length())
+        }
+        throw FileNotFoundException("Could not generate a thumbnail for: $uri")
     }
 
     private fun extractSizePx(opts: Bundle?): Int {
@@ -297,7 +298,7 @@ class LightFileProvider : ContentProvider() {
         OpenableColumns.SIZE -> if (file.isDirectory) null else file.length()
         COLUMN_IS_DIRECTORY -> if (file.isDirectory) 1 else 0
         COLUMN_LAST_MODIFIED -> file.lastModified()
-        COLUMN_META -> metaFor(file)?.let { encodeEntryMeta(it) }
+        COLUMN_META -> metaFor(file)?.let { encodeStringMap(it) }
         else -> null
     }
 

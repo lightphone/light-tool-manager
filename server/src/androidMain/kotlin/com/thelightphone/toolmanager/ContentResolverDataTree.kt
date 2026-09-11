@@ -72,7 +72,7 @@ class ContentResolverDataTree(
                 val entryPath = if (dirPathStr.isEmpty()) name else "$dirPathStr/$name"
                 val type = if (isDirectory) EntryType.Directory else entryTypeForName(name)
                 val meta = if (metaCol >= 0 && !cursor.isNull(metaCol)) {
-                    runCatching { decodeEntryMeta(cursor.getString(metaCol)) }.getOrNull()
+                    runCatching { decodeStringMap(cursor.getString(metaCol)) }.getOrNull()
                 } else {
                     null
                 }
@@ -212,7 +212,7 @@ class ContentResolverDataTree(
             putString(EXTRA_PARAMS, encodeStringMap(params))
             putString(EXTRA_CALLBACK_URL, callbackUrl)
         }
-        val result = contentResolver.call(authority, METHOD_START_JOB, resolvedPathString(path), extras)
+        val result = contentResolver.call(pathToUri(path), METHOD_START_JOB, resolvedPathString(path), extras)
         val encoded = result?.getString(RESULT_JOB_START)
             ?: throw UnsupportedOperationException("Jobs are not supported at this path")
         JobStart(jobId, JobStartResponse.decode(encoded).redirectUrl)
@@ -221,7 +221,7 @@ class ContentResolverDataTree(
     override suspend fun getJobStatus(path: Path, jobId: String): JobStatus {
         val extras = Bundle().apply { putString(EXTRA_JOB_ID, jobId) }
         val result = runCatching {
-            contentResolver.call(authority, METHOD_JOB_STATUS, resolvedPathString(path), extras)
+            contentResolver.call(pathToUri(path), METHOD_JOB_STATUS, resolvedPathString(path), extras)
         }.getOrNull() ?: return JobStatus.NotFound
         val encoded = result.getString(RESULT_JOB_STATUS) ?: return JobStatus.NotFound
         val response = runCatching { JobStatusResponse.decode(encoded) }.getOrNull() ?: return JobStatus.NotFound
@@ -242,7 +242,7 @@ class ContentResolverDataTree(
             putString(EXTRA_JOB_ID, jobId)
             putString(EXTRA_DATA, encodeStringMap(data))
         }
-        val result = contentResolver.call(authority, METHOD_COMPLETE_JOB, resolvedPathString(path), extras)
+        val result = contentResolver.call(pathToUri(path), METHOD_COMPLETE_JOB, resolvedPathString(path), extras)
             ?: throw UnsupportedOperationException("Jobs are not supported at this path")
         val accepted = result.getBoolean(RESULT_COMPLETE_JOB_SUCCESS, false)
         if (!accepted) throw IllegalStateException("Job callback was not accepted: $jobId")

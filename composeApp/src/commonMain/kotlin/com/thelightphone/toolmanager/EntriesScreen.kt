@@ -141,8 +141,8 @@ fun EntriesScreen(
                 currentPage = page
                 hasMorePages = response.pagination.hasNext
             } catch (e: CancellationException) {
-                // Not a real failure (e.g. this screen was navigated away from mid-load) -
-                // rethrow so the coroutine actually cancels instead of surfacing a spurious alert.
+                // Not a real failure, happens when navigating a way with active coroutine
+                // rethrow so the coroutine actually cancels.
                 throw e
             } catch (e: Throwable) {
                 onAlert(ToolManagerAlert("Failed to load: ${e.message}"))

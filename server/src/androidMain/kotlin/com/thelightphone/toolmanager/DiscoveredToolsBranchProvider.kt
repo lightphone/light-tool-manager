@@ -23,36 +23,9 @@ class DiscoveredToolsBranchProvider(
 ) : BranchDataTree {
 
     override suspend fun getChildren(): List<DataView<*>> = withContext(Dispatchers.IO) {
-        val pm = context.packageManager
-        val authorities = runCatching {
-            @Suppress("DEPRECATION")
-            pm.getInstalledPackages(PackageManager.GET_PROVIDERS or PackageManager.GET_META_DATA)
-                .filter { isPackageAllowed(it.packageName) }
-                .flatMap { it.providers?.toList().orEmpty() }
-                .filter { it.metaData?.getBoolean(META_DATA_TOOL_MANAGER_PROVIDER, false) == true }
-                .mapNotNull { it.authority }
-        }.getOrElse {
-            logger.reportError(TAG, it, "Failed to query installed tool providers")
-            emptyList()
+        context.discoverToolManagerEnabledTools(logger, isPackageAllowed).map { (_, authority, manifest) ->
+            buildDataView(manifest, authority)
         }
-
-        authorities.map { authority ->
-            async {
-                runCatching { withTimeoutOrNull(FETCH_TIMEOUT) { fetchManifest(authority) } }
-                    .onFailure { logger.reportError(TAG, it, "Failed to load tool manifest for $authority") }
-                    .getOrNull()
-                    ?.let { manifest -> buildDataView(manifest, authority) }
-            }
-        }.awaitAll().filterNotNull()
-    }
-
-    private fun fetchManifest(authority: String): ClientToolManifest? {
-        // The (String authority, ...) overload of call() isn't available until API 29; the
-        // Uri-based one works all the way back to API 11, so build a bare authority Uri instead.
-        val uri = Uri.Builder().scheme("content").authority(authority).build()
-        val result = context.contentResolver.call(uri, METHOD_GET_MANIFEST, null, null)
-        val raw = result?.getString(RESULT_MANIFEST) ?: return null
-        return ClientToolManifest.decode(raw)
     }
 
     private fun buildDataView(manifest: ClientToolManifest, authority: String): DataView<*> {
@@ -99,6 +72,5 @@ class DiscoveredToolsBranchProvider(
 
     companion object {
         private const val TAG = "DiscoveredToolsBranchProvider"
-        private val FETCH_TIMEOUT = 5.seconds
     }
 }

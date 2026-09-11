@@ -12,13 +12,6 @@ const val COLUMN_LAST_MODIFIED = "last_modified"
 
 // Optional, JSON-encoded Map<String, String>
 const val COLUMN_META = "meta"
-
-fun encodeEntryMeta(meta: Map<String, String>): String = Json.encodeToString(meta)
-fun decodeEntryMeta(raw: String): Map<String, String> = Json.decodeFromString(raw)
-
-// Generic Map<String, String> <-> String codec for call()/Bundle payloads that aren't entry
-// metadata specifically (e.g. job params) - same encoding as encodeEntryMeta/decodeEntryMeta,
-// just under a name that doesn't imply it's about directory entries.
 fun encodeStringMap(map: Map<String, String>): String = Json.encodeToString(map)
 fun decodeStringMap(raw: String): Map<String, String> = Json.decodeFromString(raw)
 
@@ -32,10 +25,6 @@ const val RESULT_MANIFEST = "manifest"
 
 // ContentProvider.call() methods bridging LeafDataTree's job support (see JobDataTree /
 // DataTree.kt's startJob/getJobStatus/completeJob) to a third-party tool's own LightFileProvider.
-// For all three, `arg` is the DataTree path (relative to the provider's own root, same convention
-// as every other call in this file) and results are JSON-encoded via kotlinx.serialization,
-// reusing the same JobStartResponse/JobStatusResponse DTOs the HTTP API itself uses - this is the
-// same shape of information, just carried over Binder instead of HTTP.
 const val METHOD_START_JOB = "start_job"
 const val METHOD_JOB_STATUS = "job_status"
 const val METHOD_COMPLETE_JOB = "complete_job"

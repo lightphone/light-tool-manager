@@ -90,9 +90,7 @@ fun JobScreen(
             isBusy = true
             remote.startJob(spec.path).fold(
                 onSuccess = { jobStart ->
-                    // navigateToExternalUrl opens a new tab rather than navigating this one away,
-                    // so this tab is never torn down - poll for completion here regardless of
-                    // whether a redirect happened, same as a job with no remote leg at all.
+                    // navigateToExternalUrl opens a new tab
                     jobStart.redirectUrl?.let { navigateToExternalUrl(it) }
                     pollUntilDone(jobStart.jobId)
                 },
