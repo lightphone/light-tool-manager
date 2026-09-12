@@ -45,16 +45,17 @@ open class FileDataTree(
     )
 
     private fun resolveAndValidate(path: Path, root: File): Result<Path> {
+        fun failure() = Result.failure<Path>(NoSuchElementException("Path not found: $path"))
         val resolved = try {
             root.toPath().resolve(path).toRealPath()
         } catch (_: java.nio.file.NoSuchFileException) {
-            return Result.failure(NoSuchElementException("Path not found: $path"))
+            return failure()
         }
         if (!resolved.startsWith(root.toPath().toRealPath())) {
-            return Result.failure(SecurityException("Path traversal not allowed"))
+            return failure()
         }
         if (!resolved.isReadable()) {
-            return Result.failure(NoSuchElementException("Path not found: $path"))
+            return failure()
         }
         return Result.success(resolved)
     }
