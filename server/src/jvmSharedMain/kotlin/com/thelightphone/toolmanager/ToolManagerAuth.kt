@@ -39,6 +39,15 @@ interface ToolManagerAuth {
     // True if `signature` is a valid HMAC (see RequestSigning.kt) of (method, path, timestampMillis)
     // under any currently-valid key, and timestampMillis is within the replay-tolerance window.
     suspend fun verifySignature(method: String, path: String, timestampMillis: Long, signature: String): Boolean
+
+    // Signs arbitrary data under the primary key - for tokens whose validity isn't tied to a
+    // single request's own (method, path, timestamp) the way verifySignature's are, e.g. an
+    // OAuth-style job callback's state parameter, which needs its own much longer tolerance window.
+    fun sign(data: String): String
+
+    // True if `signature` is sign(data) computed under any currently-valid key (primary or
+    // TOTP-minted). Callers are responsible for their own freshness/tolerance checks.
+    fun verify(data: String, signature: String): Boolean
 }
 
 private const val SELF_MINT_PREFIX = "_self_minted_"
@@ -91,6 +100,13 @@ class TotpToolManagerAuth(
 
         seenSignatures.entries.removeIf { (_, seenAt) -> now - seenAt > SignatureToleranceMillis }
         return seenSignatures.putIfAbsent(signature, timestampMillis) == null
+    }
+
+    override fun sign(data: String): String = hmacSha256Hex(primaryKey, data)
+
+    override fun verify(data: String, signature: String): Boolean {
+        val candidateKeys = listOf(primaryKey) + mintedKeys
+        return candidateKeys.any { key -> constantTimeEquals(hmacSha256Hex(key, data), signature) }
     }
 
     override fun currentCode(): String = hotp(secret, currentStep())

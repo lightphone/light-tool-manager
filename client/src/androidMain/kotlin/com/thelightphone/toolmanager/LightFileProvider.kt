@@ -32,6 +32,24 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
+// client-provided obj for keeping track of jobs. Jobs may be completed from behind the scenes
+// or via the public completeJob method
+interface LightFileProviderJobs {
+    // callbackUrl (optional)  is a ready-to-use URL this tool can embed as
+    // the redirect_uri of an external OAuth-style authorize URL it returns as
+    // JobStartResponse.redirectUrl. Return null to reject (path isn't job-capable, or params don't
+    // make sense) - ContentResolverDataTree maps that to "jobs not supported here".
+    fun startJob(path: String, jobId: String, params: Map<String, String>, callbackUrl: String?): JobStartResponse?
+
+    // Reports a job's status by id. Return null for an unrecognized jobId (maps to
+    // JobStatus.NotFound), same as every other job-status implementation in this codebase.
+    fun getJobStatus(path: String, jobId: String): JobStatusResponse?
+
+    // Completes a job whose remaining work happened out-of-band - e.g. an OAuth callback - `data`
+    // is whatever arbitrary data that callback carried. Return true if accepted.
+    fun completeJob(path: String, jobId: String, data: Map<String, String>): Boolean
+}
+
 /**
  * EXPERIMENTAL
  * Exposes this tools's `<filesDir>/shared` directory to the ToolManager server's
@@ -42,13 +60,17 @@ class LightFileProvider : ContentProvider() {
     companion object {
         const val SHARED_DIR = "shared"
 
-        // Client tool should set this.
+        // Client tool should set this (sdk client library adds a way to provide this via the tool EntryPoint)
         @Volatile
         var manifest: () -> ClientToolManifest? = { null }
 
         // Client tool sets this to react to writes/deletes/renames under its shared/ directory
         @Volatile
         var onToolManagerDataUpdate: (() -> Unit)? = null
+
+        // Client tool sets this to support jobs (see JobSpec) at any of its declared leaf paths.
+        @Volatile
+        var jobs: LightFileProviderJobs? = null
 
         @Volatile
         var dataUpdateDebounceDuration: Duration = 3.seconds
@@ -147,15 +169,22 @@ class LightFileProvider : ContentProvider() {
         }
         val sizePx = extractSizePx(opts)
         val bytes = cachedThumbnail(file, sizePx)
-            ?: throw FileNotFoundException("Could not generate a thumbnail for: $uri")
+        if (bytes != null) {
+            // Write-then-unlink: the fd keeps the underlying inode readable after delete(), so
+            // this leaves no temp file behind without needing pipe/thread plumbing for a
+            // one-shot JPEG.
+            val tempFile = File.createTempFile("thumb", ".jpg", context!!.cacheDir)
+            tempFile.writeBytes(bytes)
+            val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY)
+            tempFile.delete()
+            return AssetFileDescriptor(pfd, 0, bytes.size.toLong())
+        }
 
-        // Write-then-unlink: the fd keeps the underlying inode readable after delete(), so this
-        // leaves no temp file behind without needing pipe/thread plumbing for a one-shot JPEG.
-        val tempFile = File.createTempFile("thumb", ".jpg", context!!.cacheDir)
-        tempFile.writeBytes(bytes)
-        val pfd = ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY)
-        tempFile.delete()
-        return AssetFileDescriptor(pfd, 0, bytes.size.toLong())
+        // "*/*" means the caller will accept the asset as-is, thumbnail not required
+        if (mimeTypeFilter == "*/*") {
+            return AssetFileDescriptor(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY), 0, file.length())
+        }
+        throw FileNotFoundException("Could not generate a thumbnail for: $uri")
     }
 
     private fun extractSizePx(opts: Bundle?): Int {
@@ -269,7 +298,7 @@ class LightFileProvider : ContentProvider() {
         OpenableColumns.SIZE -> if (file.isDirectory) null else file.length()
         COLUMN_IS_DIRECTORY -> if (file.isDirectory) 1 else 0
         COLUMN_LAST_MODIFIED -> file.lastModified()
-        COLUMN_META -> metaFor(file)?.let { encodeEntryMeta(it) }
+        COLUMN_META -> metaFor(file)?.let { encodeStringMap(it) }
         else -> null
     }
 
@@ -283,10 +312,39 @@ class LightFileProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         checkCaller()
-        if (method != METHOD_GET_MANIFEST) return null
-        val tree = manifest.invoke() ?: return null
-        tree.roots.forEach { ensureLeafDirectoriesExist(it) }
-        return Bundle().apply { putString(RESULT_MANIFEST, tree.encode()) }
+        return when (method) {
+            METHOD_GET_MANIFEST -> {
+                val tree = manifest.invoke() ?: return null
+                tree.roots.forEach { ensureLeafDirectoriesExist(it) }
+                Bundle().apply { putString(RESULT_MANIFEST, tree.encode()) }
+            }
+
+            METHOD_START_JOB -> {
+                val path = arg ?: return null
+                val jobId = extras?.getString(EXTRA_JOB_ID) ?: return null
+                val params = extras.getString(EXTRA_PARAMS)?.let { decodeStringMap(it) }.orEmpty()
+                val callbackUrl = extras.getString(EXTRA_CALLBACK_URL)
+                val response = jobs?.startJob(path, jobId, params, callbackUrl) ?: return null
+                Bundle().apply { putString(RESULT_JOB_START, response.encode()) }
+            }
+
+            METHOD_JOB_STATUS -> {
+                val path = arg ?: return null
+                val jobId = extras?.getString(EXTRA_JOB_ID) ?: return null
+                val response = jobs?.getJobStatus(path, jobId) ?: return null
+                Bundle().apply { putString(RESULT_JOB_STATUS, response.encode()) }
+            }
+
+            METHOD_COMPLETE_JOB -> {
+                val path = arg ?: return null
+                val jobId = extras?.getString(EXTRA_JOB_ID) ?: return null
+                val data = extras.getString(EXTRA_DATA)?.let { decodeStringMap(it) }.orEmpty()
+                val accepted = jobs?.completeJob(path, jobId, data) ?: false
+                Bundle().apply { putBoolean(RESULT_COMPLETE_JOB_SUCCESS, accepted) }
+            }
+
+            else -> null
+        }
     }
 
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {

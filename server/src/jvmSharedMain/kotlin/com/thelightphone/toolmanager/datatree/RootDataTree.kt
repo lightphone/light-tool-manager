@@ -224,4 +224,38 @@ class RootDataTree(
             dataProvider.rename(subPath, newName)
         }.also { if (it.getOrDefault(false)) invalidateCache() }
     }
+
+    override suspend fun startJob(
+        path: Path,
+        params: Map<String, String>,
+        selfOrigin: String,
+        mintCallbackState: (jobId: String) -> String
+    ): Result<JobStart> {
+        return withProvider(path) { dataProvider, subPath, _ ->
+            dataProvider.startJob(subPath, params, selfOrigin, mintCallbackState)
+        }
+    }
+
+    override suspend fun getJobStatus(path: Path, jobId: String): JobStatus {
+        return withProvider(path) { dataProvider, subPath, consumed ->
+            val status = dataProvider.getJobStatus(subPath, jobId)
+            // job results are files, which can be read after
+            val resultPath = (status as? JobStatus.Succeeded)?.resultPath
+            val prefixed = if (status is JobStatus.Succeeded && resultPath != null) {
+                val consumedStr = consumed.toString()
+                val fullPath = if (consumedStr == ".") resultPath else Path.of("$consumedStr/$resultPath")
+                status.copy(resultPath = fullPath)
+            } else {
+                status
+            }
+            Result.success(prefixed)
+        }.getOrElse { JobStatus.NotFound }
+    }
+
+    // Re-resolves `path` and hands the callback data to whichever provider owns it.
+    override suspend fun completeJob(path: Path, jobId: String, data: Map<String, String>): Result<Unit> {
+        return withProvider(path) { dataProvider, subPath, _ ->
+            dataProvider.completeJob(subPath, jobId, data)
+        }
+    }
 }

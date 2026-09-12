@@ -21,7 +21,8 @@ data class ClientLeafNode(
     // to spec.path when left blank
     val basePath: String = "",
     val readOnly: Boolean = false,
-    val showHiddenFiles: Boolean = false
+    val showHiddenFiles: Boolean = false,
+    val canBeBackedUp: Boolean = false
 ) : ClientTreeNode()
 
 @Serializable

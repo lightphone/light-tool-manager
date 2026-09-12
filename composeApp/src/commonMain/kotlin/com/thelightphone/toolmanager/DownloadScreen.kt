@@ -16,10 +16,10 @@ import com.thelightphone.filemanager.Remote
 import kotlinx.coroutines.launch
 
 @Composable
-fun ExportScreen(
-    spec: ExportSpec,
-    isUploading: Boolean,
-    onUploadClick: () -> Unit,
+fun DownloadScreen(
+    spec: DownloadSpec,
+    isDownloading: Boolean,
+    onDownloadClick: () -> Unit,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -27,24 +27,24 @@ fun ExportScreen(
     ) {
         SpecHeaderText(spec)
         TextButton(
-            enabled = !isUploading,
+            enabled = !isDownloading,
             text = spec.buttonText,
             dashed = false,
-            onClick = onUploadClick,
+            onClick = onDownloadClick,
         )
     }
 }
 
 @Composable
-fun ExportScreen(
+fun DownloadScreen(
     remote: Remote,
-    spec: ExportSpec,
+    spec: DownloadSpec,
     onAlert: (ToolManagerAlert) -> Unit = ::pushGlobalAlert
 ) {
     var isDownloading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    fun onClickExport() {
+    fun onClickDownload() {
         coroutineScope.launch {
             isDownloading = true
             remote.requestDownloadToken(listOf(spec.resourceFullPath))
@@ -54,20 +54,20 @@ fun ExportScreen(
         }
     }
 
-    ExportScreen(spec, isDownloading, ::onClickExport)
+    DownloadScreen(spec, isDownloading, ::onClickDownload)
 }
 
 @Preview(device = Devices.DESKTOP)
 @Composable
-fun ExportScreenPreview() {
+fun DownloadScreenPreview() {
     AppTheme {
-        val spec = ExportSpec(
+        val spec = DownloadSpec(
             "Export",
             "",
             resourceSubPath = "",
             headerText = "Sample thing\nTry this.",
             buttonText = "Click Here to Export"
         )
-        ExportScreen(spec, false, onUploadClick = {})
+        DownloadScreen(spec, false, onDownloadClick = {})
     }
 }

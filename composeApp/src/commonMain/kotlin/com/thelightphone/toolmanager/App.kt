@@ -146,6 +146,11 @@ fun App() {
         // back/forward event can be resolved to a spec.
         var visitedSpecs by remember { mutableStateOf<Map<String, DataViewSpec>>(emptyMap()) }
 
+        // (specPath, jobId) of a job-callback redirect landing us back on that job's screen (see
+        // consumeResumeJobParams/JobCallbackPath). Cleared once JobScreen has picked it up and
+        // started polling, so navigating away and back doesn't re-trigger the resume.
+        var pendingResumeJob by remember { mutableStateOf<Pair<String, String>?>(null) }
+
         val apiKey = remember { getApiKey() }
 
         val remote: Remote = remember(apiKey) {
@@ -195,6 +200,24 @@ fun App() {
                     currentSpec = null
                     backStack = emptyList()
                 }
+            }
+        }
+
+        // A LeafViewSpec's own fields (buttonText, headerText, etc) only exist as part of its
+        // parent branch's children listing - there's no "get me the spec at this exact path"
+        // endpoint - so resuming into one means re-fetching its parent's children and picking it
+        // back out, the same way normal browsing discovers it in the first place.
+        suspend fun resolveSpec(path: String): DataViewSpec? {
+            val parentPath = path.substringBeforeLast('/', missingDelimiterValue = "")
+            return remote.treeAt(parentPath).getOrNull()?.firstOrNull { it.path == path }
+        }
+
+        LaunchedEffect(Unit) {
+            val (path, jobId) = consumeResumeJobParams() ?: return@LaunchedEffect
+            val spec = resolveSpec(path)
+            if (spec != null) {
+                navigateTo(spec, pushState = false)
+                pendingResumeJob = path to jobId
             }
         }
 
@@ -256,14 +279,22 @@ fun App() {
                         spec = spec,
                     )
 
-                    is DropboxSpec -> DropBoxScreen(
+                    is UploadSpec -> UploadScreen(
                         remote = remote,
                         spec = spec,
                     )
 
-                    is ExportSpec -> ExportScreen(
+                    is DownloadSpec -> DownloadScreen(
                         remote = remote,
                         spec = spec
+                    )
+
+                    is JobSpec -> JobScreen(
+                        remote = remote,
+                        spec = spec,
+                        onNavigateBack = ::navigateBack,
+                        resumeJobId = pendingResumeJob?.takeIf { it.first == spec.path }?.second,
+                        onResumeConsumed = { pendingResumeJob = null },
                     )
 
                     is CustomSpec -> { /*Do not render anything for custom specs */ }

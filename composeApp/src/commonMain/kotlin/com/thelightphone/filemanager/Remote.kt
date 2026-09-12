@@ -7,6 +7,10 @@ import com.thelightphone.toolmanager.DirectoryMeta
 import com.thelightphone.toolmanager.DownloadRequest
 import com.thelightphone.toolmanager.DownloadTokenResponse
 import com.thelightphone.toolmanager.Entry
+import com.thelightphone.toolmanager.JobState
+import com.thelightphone.toolmanager.JobStartRequest
+import com.thelightphone.toolmanager.JobStartResponse
+import com.thelightphone.toolmanager.JobStatusResponse
 import com.thelightphone.toolmanager.PaginatedResponse
 import com.thelightphone.toolmanager.PaginationInfo
 import com.thelightphone.toolmanager.SortBy
@@ -30,7 +34,24 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlin.time.Clock
+
+// Like runCatching, but re-throws CancellationException instead of wrapping it into a
+// Result.failure. runCatching's plain `catch (Throwable)` treats a coroutine being cancelled (e.g.
+// because the screen that called this left composition) the same as a real failure, which not
+// only breaks structured concurrency's cancellation propagation but means callers that surface
+// Result.failure as a user-facing alert (RootScreen, DownloadScreen, etc.) show a spurious "Failed
+// to load" every time a request gets interrupted by ordinary navigation - not just genuine errors.
+private suspend fun <T> resultCatching(block: suspend () -> T): Result<T> {
+    return try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        Result.failure(e)
+    }
+}
 
 // Abstraction for fetching data from the server
 interface Remote {
@@ -45,6 +66,8 @@ interface Remote {
     ): Result<PaginatedResponse<Entry>>
     suspend fun metaAt(path: String): Result<DirectoryMeta>
     suspend fun requestDownloadToken(paths: List<String>): Result<DownloadTokenResponse>
+    suspend fun startJob(path: String, params: Map<String, String> = emptyMap()): Result<JobStartResponse>
+    suspend fun jobStatus(path: String, jobId: String): Result<JobStatusResponse>
     suspend fun notifyUpload(path: String): Result<Unit>
     suspend fun deleteFile(path: String): Result<Boolean>
     suspend fun uploadBytes(url: String, bytes: ByteArray, timeoutMillis: Long): HttpStatusCode
@@ -54,16 +77,12 @@ interface Remote {
 }
 
 class HttpRemote(private val client: HttpClient, private val apiKey: String?) : Remote {
-    override suspend fun ping(): Result<Boolean> {
-        return try {
-            Result.success(client.get("${getBaseUrl()}/ping").status.isSuccess())
-        } catch (e: Throwable) {
-            Result.failure(e)
-        }
+    override suspend fun ping(): Result<Boolean> = resultCatching {
+        client.get("${getBaseUrl()}/ping").status.isSuccess()
     }
 
     override suspend fun treeAt(path: String): Result<List<DataViewSpec>> {
-        return runCatching { client.get("${getBaseUrl()}/api/tree/$path").body<List<DataViewSpec>>() }
+        return resultCatching { client.get("${getBaseUrl()}/api/tree/$path").body<List<DataViewSpec>>() }
     }
 
     override suspend fun filesAt(
@@ -72,7 +91,7 @@ class HttpRemote(private val client: HttpClient, private val apiKey: String?) : 
         size: Int,
         sortBy: SortBy,
         sortOrder: SortOrder
-    ): Result<PaginatedResponse<Entry>> = runCatching {
+    ): Result<PaginatedResponse<Entry>> = resultCatching {
         client.get("${getBaseUrl()}/api/files/$path") {
             parameter("page", page)
             parameter("size", size)
@@ -81,11 +100,11 @@ class HttpRemote(private val client: HttpClient, private val apiKey: String?) : 
         }.body()
     }
 
-    override suspend fun metaAt(path: String): Result<DirectoryMeta> = runCatching {
+    override suspend fun metaAt(path: String): Result<DirectoryMeta> = resultCatching {
         client.get("${getBaseUrl()}/api/meta/$path").body()
     }
 
-    override suspend fun requestDownloadToken(paths: List<String>): Result<DownloadTokenResponse> = runCatching {
+    override suspend fun requestDownloadToken(paths: List<String>): Result<DownloadTokenResponse> = resultCatching {
         val response = client.post("${getBaseUrl()}/api/download") {
             contentType(ContentType.Application.Json)
             setBody(DownloadRequest(paths = paths))
@@ -94,12 +113,29 @@ class HttpRemote(private val client: HttpClient, private val apiKey: String?) : 
         response.body<DownloadTokenResponse>()
     }
 
-    override suspend fun notifyUpload(path: String): Result<Unit> = runCatching {
+    override suspend fun startJob(path: String, params: Map<String, String>): Result<JobStartResponse> = resultCatching {
+        val response = client.post("${getBaseUrl()}/api/job/$path") {
+            contentType(ContentType.Application.Json)
+            setBody(JobStartRequest(params))
+        }
+        check(response.status.isSuccess()) { "Job start failed: ${response.status}" }
+        response.body<JobStartResponse>()
+    }
+
+    override suspend fun jobStatus(path: String, jobId: String): Result<JobStatusResponse> = resultCatching {
+        val response = client.get("${getBaseUrl()}/api/job/$path") {
+            parameter("jobId", jobId)
+        }
+        check(response.status.isSuccess()) { "Job status check failed: ${response.status}" }
+        response.body<JobStatusResponse>()
+    }
+
+    override suspend fun notifyUpload(path: String): Result<Unit> = resultCatching {
         client.post("${getBaseUrl()}/api/notify/$path")
         Unit
     }
 
-    override suspend fun deleteFile(path: String): Result<Boolean> = runCatching {
+    override suspend fun deleteFile(path: String): Result<Boolean> = resultCatching {
         client.delete("${getBaseUrl()}/api/files/$path").status.isSuccess()
     }
 
@@ -170,6 +206,12 @@ object PreviewRemote : Remote {
 
     override suspend fun requestDownloadToken(paths: List<String>): Result<DownloadTokenResponse> =
         Result.success(DownloadTokenResponse(token = "preview-token", expiresAt = ""))
+
+    override suspend fun startJob(path: String, params: Map<String, String>): Result<JobStartResponse> =
+        Result.success(JobStartResponse(jobId = "preview-job"))
+
+    override suspend fun jobStatus(path: String, jobId: String): Result<JobStatusResponse> =
+        Result.success(JobStatusResponse(jobId = jobId, status = JobState.SUCCEEDED))
 
     override suspend fun notifyUpload(path: String): Result<Unit> = Result.success(Unit)
 

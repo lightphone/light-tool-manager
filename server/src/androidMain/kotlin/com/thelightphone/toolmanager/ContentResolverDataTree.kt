@@ -7,12 +7,16 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Size
 import com.thelightphone.toolmanager.datatree.CachingDataTree
+import com.thelightphone.toolmanager.datatree.JobStart
+import com.thelightphone.toolmanager.datatree.JobStatus
 import com.thelightphone.toolmanager.datatree.WriteCheck
 import com.thelightphone.toolmanager.datatree.WriteTarget
 import com.thelightphone.toolmanager.datatree.entryTypeForName
 import java.io.InputStream
+import java.net.URLEncoder
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.UUID
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
@@ -33,13 +37,19 @@ class ContentResolverDataTree(
     timeNow: () -> Instant = { Clock.System.now() }
 ) : CachingDataTree(readOnly, showHiddenFiles, cacheTtl, timeNow) {
 
-    private fun pathToUri(path: Path): Uri {
+    // Path relative to the whole provider's root (not just this DataTree's own basePath) - the
+    // same convention query()/openFile()/etc all address the provider by, and what a tool's own
+    // LightFileProviderJobs implementation should expect in the job calls below too.
+    private fun resolvedPathString(path: Path): String {
         val pathStr = basePath.resolve(path).normalize().toString()
-        val cleanPath = if (pathStr == ".") "" else pathStr
+        return if (pathStr == ".") "" else pathStr
+    }
+
+    private fun pathToUri(path: Path): Uri {
         return Uri.Builder()
             .scheme("content")
             .authority(authority)
-            .path(cleanPath)
+            .path(resolvedPathString(path))
             .build()
     }
 
@@ -62,7 +72,7 @@ class ContentResolverDataTree(
                 val entryPath = if (dirPathStr.isEmpty()) name else "$dirPathStr/$name"
                 val type = if (isDirectory) EntryType.Directory else entryTypeForName(name)
                 val meta = if (metaCol >= 0 && !cursor.isNull(metaCol)) {
-                    runCatching { decodeEntryMeta(cursor.getString(metaCol)) }.getOrNull()
+                    runCatching { decodeStringMap(cursor.getString(metaCol)) }.getOrNull()
                 } else {
                     null
                 }
@@ -182,5 +192,59 @@ class ContentResolverDataTree(
             put(OpenableColumns.DISPLAY_NAME, newName)
         }
         contentResolver.update(uri, values, null, null) > 0
+    }
+
+    // Bridges LeafDataTree's job support to a third-party tool's own LightFileProviderJobs (see
+    // LightFileProvider.kt in the client module for the other side of this contract). The jobId is
+    // minted here, not by the tool, since building the callback URL requires this server's own
+    // signing key (mintCallbackState) - the tool only needs to remember whatever id it's handed.
+    override suspend fun startJob(
+        path: Path,
+        params: Map<String, String>,
+        selfOrigin: String,
+        mintCallbackState: (jobId: String) -> String
+    ): Result<JobStart> = runCatching {
+        val jobId = UUID.randomUUID().toString()
+        val state = mintCallbackState(jobId)
+        val callbackUrl = "$selfOrigin$JobCallbackPath?state=${URLEncoder.encode(state, "UTF-8")}"
+        val extras = Bundle().apply {
+            putString(EXTRA_JOB_ID, jobId)
+            putString(EXTRA_PARAMS, encodeStringMap(params))
+            putString(EXTRA_CALLBACK_URL, callbackUrl)
+        }
+        val result = contentResolver.call(pathToUri(path), METHOD_START_JOB, resolvedPathString(path), extras)
+        val encoded = result?.getString(RESULT_JOB_START)
+            ?: throw UnsupportedOperationException("Jobs are not supported at this path")
+        JobStart(jobId, JobStartResponse.decode(encoded).redirectUrl)
+    }
+
+    override suspend fun getJobStatus(path: Path, jobId: String): JobStatus {
+        val extras = Bundle().apply { putString(EXTRA_JOB_ID, jobId) }
+        val result = runCatching {
+            contentResolver.call(pathToUri(path), METHOD_JOB_STATUS, resolvedPathString(path), extras)
+        }.getOrNull() ?: return JobStatus.NotFound
+        val encoded = result.getString(RESULT_JOB_STATUS) ?: return JobStatus.NotFound
+        val response = runCatching { JobStatusResponse.decode(encoded) }.getOrNull() ?: return JobStatus.NotFound
+        return when (response.status) {
+            JobState.PENDING -> JobStatus.Pending
+            JobState.RUNNING -> JobStatus.Running
+            JobState.SUCCEEDED -> JobStatus.Succeeded(
+                resultPath = response.resultPath?.let { Paths.get(it) },
+                message = response.message
+            )
+
+            JobState.FAILED -> JobStatus.Failed(response.message ?: "Job failed")
+        }
+    }
+
+    override suspend fun completeJob(path: Path, jobId: String, data: Map<String, String>): Result<Unit> = runCatching {
+        val extras = Bundle().apply {
+            putString(EXTRA_JOB_ID, jobId)
+            putString(EXTRA_DATA, encodeStringMap(data))
+        }
+        val result = contentResolver.call(pathToUri(path), METHOD_COMPLETE_JOB, resolvedPathString(path), extras)
+            ?: throw UnsupportedOperationException("Jobs are not supported at this path")
+        val accepted = result.getBoolean(RESULT_COMPLETE_JOB_SUCCESS, false)
+        if (!accepted) throw IllegalStateException("Job callback was not accepted: $jobId")
     }
 }

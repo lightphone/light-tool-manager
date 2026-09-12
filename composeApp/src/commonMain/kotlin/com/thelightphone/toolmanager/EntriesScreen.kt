@@ -83,6 +83,7 @@ import kotlinx.datetime.format.Padding
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Instant
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -139,6 +140,10 @@ fun EntriesScreen(
 
                 currentPage = page
                 hasMorePages = response.pagination.hasNext
+            } catch (e: CancellationException) {
+                // Not a real failure, happens when navigating a way with active coroutine
+                // rethrow so the coroutine actually cancels.
+                throw e
             } catch (e: Throwable) {
                 onAlert(ToolManagerAlert("Failed to load: ${e.message}"))
             }

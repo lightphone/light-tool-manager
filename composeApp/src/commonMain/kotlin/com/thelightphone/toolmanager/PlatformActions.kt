@@ -9,6 +9,15 @@ expect fun getBaseUrl(): String
 
 expect fun triggerDownload(url: String)
 
+// Opens an external URL (e.g. a job's OAuth-style redirectUrl) in a new tab
+expect fun navigateToExternalUrl(url: String)
+
+// Reads and clears the one-shot ?resumeJob=<path>&jobId=<id> query params a job-callback redirect
+// (see JobCallbackPath in Application.kt) lands the browser on, returning (path, jobId) if
+// present.
+// TODO probably want more generic deep linking
+expect fun consumeResumeJobParams(): Pair<String, String>?
+
 // path is null for root, non-null for a directory
 expect fun pushBrowserState(path: String?)
 

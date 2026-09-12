@@ -16,8 +16,8 @@ import com.thelightphone.filemanager.Remote
 import kotlinx.coroutines.launch
 
 @Composable
-fun DropBoxScreen(
-    spec: DropboxSpec,
+fun UploadScreen(
+    spec: UploadSpec,
     isUploading: Boolean,
     onUploadClick: () -> Unit,
 ) {
@@ -36,9 +36,9 @@ fun DropBoxScreen(
 }
 
 @Composable
-fun DropBoxScreen(
+fun UploadScreen(
     remote: Remote,
-    spec: DropboxSpec,
+    spec: UploadSpec,
     onAlert: (ToolManagerAlert) -> Unit = ::pushGlobalAlert
 ) {
     val rootPath = remember(spec) { spec.path }
@@ -65,19 +65,19 @@ fun DropBoxScreen(
         )
     }
 
-    DropBoxScreen(spec, isUploading, ::onClickUpload)
+    UploadScreen(spec, isUploading, ::onClickUpload)
 }
 
 @Preview(device = Devices.DESKTOP)
 @Composable
-fun DropBoxScreenPreview() {
+fun UploadScreenPreview() {
     AppTheme {
-        val spec = DropboxSpec(
-            "DropBox",
+        val spec = UploadSpec(
+            "Upload",
             "",
             headerText = "Sample thing\nTry this.",
             buttonText = "Click Here to Upload"
         )
-        DropBoxScreen(spec, false, onUploadClick = {})
+        UploadScreen(spec, false, onUploadClick = {})
     }
 }
