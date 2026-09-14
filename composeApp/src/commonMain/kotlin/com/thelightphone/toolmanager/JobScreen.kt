@@ -61,6 +61,12 @@ fun JobScreen(
                 JobState.SUCCEEDED -> {
                     isBusy = false
                     onAlert(ToolManagerAlert(status.message ?: "Job completed successfully."))
+                    val resultPath = status.resultPath
+                    if (resultPath != null) {
+                        remote.requestDownloadToken(listOf(resultPath))
+                            .onSuccess { remote.downloadFile(it.token) }
+                            .onFailure { onAlert(ToolManagerAlert("Error downloading result.")) }
+                    }
                     succeeded = true
                     return
                 }
