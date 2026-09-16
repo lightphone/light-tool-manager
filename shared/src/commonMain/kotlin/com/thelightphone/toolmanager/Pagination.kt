@@ -22,7 +22,9 @@ data class PageRequest(
     val page: Int = 1,
     val size: Int = 20,
     val sortBy: SortBy = SortBy.DATE,
-    val sortOrder: SortOrder = SortOrder.DESC
+    val sortOrder: SortOrder = SortOrder.DESC,
+    // When true, recursively descends into every subdirectory and returns only files
+    val flatten: Boolean = false
 ) {
     val offset: Int get() = (page - 1) * size
 }
@@ -40,7 +42,8 @@ fun createPageRequest(
     page: String?,
     size: String?,
     sortBy: String?,
-    sortOrder: String?
+    sortOrder: String?,
+    flatten: String? = null
 ): Result<PageRequest> = try {
     val pageInt = page?.toIntOrNull() ?: 1
     val sizeInt = size?.toIntOrNull() ?: 20
@@ -50,7 +53,7 @@ fun createPageRequest(
     val sort = sortBy?.uppercase()?.let { sb ->
         SortBy.entries.find { it.name == sb.uppercase() }
     } ?: SortBy.DATE
-    Result.success(PageRequest(pageInt, sizeInt, sort, order))
+    Result.success(PageRequest(pageInt, sizeInt, sort, order, flatten == "true"))
 } catch (e: IllegalArgumentException) {
     Result.failure(e)
 }

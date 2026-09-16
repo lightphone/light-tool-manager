@@ -41,9 +41,16 @@ abstract class CachingDataTree(
         override val cachedAt: Instant
     ) : Cacheable
 
+    // no entries should be directories!
+    private data class CachedFlatEntries(
+        val entries: List<Entry>,
+        override val cachedAt: Instant
+    ) : Cacheable
+
     private val Cacheable.isExpired: Boolean get() = timeNow() - cachedAt > cacheTtl
 
     private val cache = ConcurrentHashMap<String, CachedEntries>()
+    private val flattenCache = ConcurrentHashMap<String, CachedFlatEntries>()
     private val metaDataCache = ConcurrentHashMap<String, CachedMeta>()
 
     protected abstract fun listEntries(path: Path): Result<List<Entry>>
@@ -81,6 +88,7 @@ abstract class CachingDataTree(
 
     override suspend fun invalidateCache() {
         cache.clear()
+        flattenCache.clear()
         metaDataCache.clear()
     }
 
@@ -96,6 +104,9 @@ abstract class CachingDataTree(
     protected fun invalidateParentCache(filePath: Path) {
         val parentKey = normalizeCacheKey(filePath.parent ?: Path.of("."))
         cache.remove(parentKey)
+        // hard to tell if something in the flattenCache is affected, so just clear it
+        // we don't expect to use this too often?
+        flattenCache.clear()
     }
 
     override suspend fun getDirectoryMeta(directoryPath: Path): Result<DirectoryMeta> {
@@ -103,18 +114,15 @@ abstract class CachingDataTree(
         return Result.success(DirectoryMeta(readOnly))
     }
 
-    override suspend fun getDirectoryForPath(
-        path: Path,
-        pageRequest: PageRequest,
-        invalidateCache: Boolean
-    ): Result<PaginatedResponse<Entry>> {
+    // Cache-populate-or-hit for a single directory level
+    private fun getOrFetchEntries(path: Path, invalidateCache: Boolean): Result<CachedEntries> {
         val cacheKey = normalizeCacheKey(path)
         if (invalidateCache) {
             cache.remove(cacheKey)
         }
 
         val cached = cache[cacheKey]?.takeUnless { it.isExpired }
-        val allEntries = cached?.let { Result.success(it) }
+        return cached?.let { Result.success(it) }
             ?: listEntries(path).map { entries ->
                 val filtered = entries.filter { showHiddenFiles || !it.title.startsWith(".") }
                 val grouped = filtered.groupBy { it.type == EntryType.Directory }
@@ -124,18 +132,51 @@ abstract class CachingDataTree(
                     cachedAt = timeNow()
                 ).also { cache[cacheKey] = it }
             }
+    }
 
-        return allEntries.map { entries ->
-            val comparator = when (pageRequest.sortBy) {
-                SortBy.DATE -> compareBy { it.lastModified }
-                SortBy.SIZE -> compareBy { it.size }
-                SortBy.NAME -> compareBy(String.CASE_INSENSITIVE_ORDER) { it: Entry -> it.title }
-                SortBy.KIND -> compareBy { it: Entry -> it.type.ordinal }
-            }.let { if (pageRequest.sortOrder == SortOrder.DESC) it.reversed() else it }
+    // Recursively walks `path`, returning every file beneath it (directories themselves are never included)
+    private fun getFlattenedEntries(path: Path, invalidateCache: Boolean): Result<List<Entry>> {
+        val cacheKey = normalizeCacheKey(path)
+        if (invalidateCache) {
+            flattenCache.remove(cacheKey)
+        }
 
-            val sorted = entries.directoryEntries.sortedWith(comparator) +
-                    entries.fileEntries.sortedWith(comparator)
+        val cached = flattenCache[cacheKey]?.takeUnless { it.isExpired }
+        if (cached != null) {
+            return Result.success(cached.entries)
+        }
 
+        return getOrFetchEntries(path, invalidateCache).mapCatching { entries ->
+            entries.fileEntries + entries.directoryEntries.flatMap { dir ->
+                getFlattenedEntries(Path.of(dir.path), invalidateCache).getOrThrow()
+            }
+        }.onSuccess { flat ->
+            flattenCache[cacheKey] = CachedFlatEntries(flat, cachedAt = timeNow())
+        }
+    }
+
+    override suspend fun getDirectoryForPath(
+        path: Path,
+        pageRequest: PageRequest,
+        invalidateCache: Boolean
+    ): Result<PaginatedResponse<Entry>> {
+        val comparator = when (pageRequest.sortBy) {
+            SortBy.DATE -> compareBy { it: Entry -> it.lastModified }
+            SortBy.SIZE -> compareBy { it: Entry -> it.size }
+            SortBy.NAME -> compareBy(String.CASE_INSENSITIVE_ORDER) { it: Entry -> it.title }
+            SortBy.KIND -> compareBy { it: Entry -> it.type.ordinal }
+        }.let { if (pageRequest.sortOrder == SortOrder.DESC) it.reversed() else it }
+
+        val allEntries: Result<List<Entry>> = if (pageRequest.flatten) {
+            getFlattenedEntries(path, invalidateCache).map { it.sortedWith(comparator) }
+        } else {
+            getOrFetchEntries(path, invalidateCache).map { entries ->
+                entries.directoryEntries.sortedWith(comparator) +
+                        entries.fileEntries.sortedWith(comparator)
+            }
+        }
+
+        return allEntries.map { sorted ->
             val totalItems = sorted.size
             val totalPages =
                 if (totalItems == 0) 1 else (totalItems + pageRequest.size - 1) / pageRequest.size
