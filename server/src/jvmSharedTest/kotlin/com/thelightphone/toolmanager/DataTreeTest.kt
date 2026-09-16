@@ -177,6 +177,67 @@ class DataTreeTest {
     }
 
     @Test
+    fun `flatten returns only files, with paths relative to the queried root`() = runBlocking {
+        File(tempDir, "top.txt").writeText("top")
+        val a = File(tempDir, "a").apply { mkdir() }
+        File(a, "a1.txt").writeText("a1")
+        val ab = File(a, "b").apply { mkdir() }
+        File(ab, "b1.txt").writeText("b1")
+
+        val result = createProvider()
+            .getDirectoryForPath(Path.of("."), PageRequest(size = 100, flatten = true))
+            .getOrThrow()
+
+        assertEquals(3, result.pagination.totalItems)
+        assertTrue(result.data.none { it.type == EntryType.Directory })
+        assertEquals(
+            setOf("top.txt", "a/a1.txt", "a/b/b1.txt"),
+            result.data.map { it.path }.toSet()
+        )
+    }
+
+    @Test
+    fun `flatten combined with sorting finds the oldest file across subdirectories`() = runBlocking {
+        val old = File(tempDir, "old.txt").apply { writeText("old") }
+        val sub = File(tempDir, "nested").apply { mkdir() }
+        val oldest = File(sub, "oldest.txt").apply { writeText("oldest") }
+        val newest = File(tempDir, "newest.txt").apply { writeText("newest") }
+
+        old.setLastModified(2000)
+        oldest.setLastModified(1000)
+        newest.setLastModified(3000)
+
+        val result = createProvider()
+            .getDirectoryForPath(
+                Path.of("."),
+                PageRequest(size = 1, sortBy = SortBy.DATE, sortOrder = SortOrder.ASC, flatten = true)
+            )
+            .getOrThrow()
+
+        assertEquals(1, result.data.size)
+        assertEquals("nested/oldest.txt", result.data[0].path)
+        assertEquals(3, result.pagination.totalItems)
+    }
+
+    @Test
+    fun `flatten only descends beneath the requested subpath`() = runBlocking {
+        val photos = File(tempDir, "photos").apply { mkdir() }
+        File(photos, "a.jpg").writeText("a")
+        val album = File(photos, "album").apply { mkdir() }
+        File(album, "b.jpg").writeText("b")
+        File(tempDir, "unrelated.txt").writeText("unrelated")
+
+        val result = createProvider()
+            .getDirectoryForPath(Path.of("photos"), PageRequest(size = 100, flatten = true))
+            .getOrThrow()
+
+        assertEquals(
+            setOf("photos/a.jpg", "photos/album/b.jpg"),
+            result.data.map { it.path }.toSet()
+        )
+    }
+
+    @Test
     fun `nonexistent path fails`() = runBlocking {
         val result = createProvider().getDirectoryForPath(Path.of("nope"), PageRequest())
         assertTrue(result.isFailure)

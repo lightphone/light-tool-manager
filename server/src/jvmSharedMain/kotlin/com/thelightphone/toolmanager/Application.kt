@@ -202,7 +202,8 @@ fun Application.module(
                 page = call.request.queryParameters["page"],
                 size = call.request.queryParameters["size"],
                 sortBy = call.request.queryParameters["sortBy"],
-                sortOrder = call.request.queryParameters["sortOrder"]
+                sortOrder = call.request.queryParameters["sortOrder"],
+                flatten = call.request.queryParameters["flatten"]
             )
 
             pageRequestResult.fold(
