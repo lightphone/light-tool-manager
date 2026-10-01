@@ -15,7 +15,11 @@ actual fun navigateToExternalUrl(url: String) {}
 
 actual fun consumeResumeJobParams(): Pair<String, String>? = null
 
+actual fun getInitialDeepLinkPath(): String? = null
+
 actual fun pushBrowserState(path: String?) {}
+
+actual fun replaceBrowserState(path: String?) {}
 
 actual fun onBrowserBack(handler: (path: String?) -> Unit) {}
 actual fun triggerFilePicker(

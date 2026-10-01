@@ -11,6 +11,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import androidx.annotation.RequiresPermission
 import com.thelightphone.toolmanager.datatree.RootDataTree
+import io.ktor.http.encodeURLPath
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.engine.sslConnector
@@ -135,13 +136,16 @@ class ToolManagerServiceAndroid(
         }
     }
 
-    fun getHttpsUrl(hostOverride: InetAddress? = null): String? {
+    // path, if given, is a tree node path (e.g. "Photos/Vacation") the URL deep links to once the
+    // client has authenticated.
+    fun getHttpsUrl(hostOverride: InetAddress? = null, path: String? = null): String? {
         val key = auth?.primaryKey ?: return null
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val address = hostOverride ?: getWifiAddress(wifi)
         if (address.hostAddress == "0.0.0.0") return null
         val domain = address.hostAddress!!.replace('.', '-') + ".my.local-ip.co"
-        return "https://$domain:$port/#$key"
+        val deepLink = path?.trim('/')?.takeIf { it.isNotEmpty() }?.let { "/" + it.encodeURLPath() }.orEmpty()
+        return "https://$domain:$port/#$key$deepLink"
     }
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)

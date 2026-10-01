@@ -18,8 +18,14 @@ expect fun navigateToExternalUrl(url: String)
 // TODO probably want more generic deep linking
 expect fun consumeResumeJobParams(): Pair<String, String>?
 
+// The path (see DeepLink.kt) the app was opened at, or null for the root. Read once at startup.
+expect fun getInitialDeepLinkPath(): String?
+
 // path is null for root, non-null for a directory
 expect fun pushBrowserState(path: String?)
+
+// Same as pushBrowserState, but overwrites the current history entry instead of adding one
+expect fun replaceBrowserState(path: String?)
 
 expect fun onBrowserBack(handler: (path: String?) -> Unit)
 

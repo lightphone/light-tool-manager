@@ -196,6 +196,8 @@ fun App() {
                 val target = pathString?.let { visitedSpecs[it] }
                 if (target != null) {
                     currentSpec = target
+                    backStack = listOf<DataViewSpec?>(null) +
+                        pathChain(target.path).dropLast(1).mapNotNull { visitedSpecs[it] }
                 } else {
                     currentSpec = null
                     backStack = emptyList()
@@ -212,13 +214,27 @@ fun App() {
             return remote.treeAt(parentPath).getOrNull()?.firstOrNull { it.path == path }
         }
 
+        // A job-callback redirect takes priority over a deep link in the URL fragment.
         LaunchedEffect(Unit) {
-            val (path, jobId) = consumeResumeJobParams() ?: return@LaunchedEffect
-            val spec = resolveSpec(path)
-            if (spec != null) {
-                navigateTo(spec, pushState = false)
-                pendingResumeJob = path to jobId
+            val resume = consumeResumeJobParams()
+            if (resume != null) {
+                val (path, jobId) = resume
+                val spec = resolveSpec(path)
+                if (spec != null) {
+                    navigateTo(spec, pushState = false)
+                    pendingResumeJob = path to jobId
+                }
+                return@LaunchedEffect
             }
+
+            // handle normal deep link
+            val initialPath = getInitialDeepLinkPath() ?: return@LaunchedEffect
+            val chain = pathChain(initialPath).map { resolveSpec(it) ?: return@LaunchedEffect }
+            replaceBrowserState(null)
+            chain.forEach { pushBrowserState(it.path) }
+            visitedSpecs = visitedSpecs + chain.associateBy { it.path }
+            backStack = listOf<DataViewSpec?>(null) + chain.dropLast(1)
+            currentSpec = chain.last()
         }
 
         // ping server continuously
