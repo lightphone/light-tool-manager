@@ -4,30 +4,9 @@ import com.thelightphone.filemanager.Remote
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Url
 import kotlinx.browser.document
-import kotlinx.browser.sessionStorage
 import kotlinx.browser.window
 import kotlinx.coroutines.await
 import kotlin.time.Clock
-
-private const val API_KEY_STORAGE_KEY = "apiKey"
-
-private var cachedApiKey: String? = null
-private var apiKeyExtracted = false
-
-actual fun getApiKey(): String? {
-    if (!apiKeyExtracted) {
-        apiKeyExtracted = true
-        val hash = window.location.hash.removePrefix("#")
-        if (hash.isNotEmpty()) {
-            cachedApiKey = hash
-            sessionStorage.setItem(API_KEY_STORAGE_KEY, hash)
-            window.history.replaceState(null, "", window.location.pathname)
-        } else {
-            cachedApiKey = sessionStorage.getItem(API_KEY_STORAGE_KEY)
-        }
-    }
-    return cachedApiKey
-}
 
 actual fun triggerDownload(url: String) {
     val link = document.createElement("a")
@@ -50,18 +29,6 @@ actual fun consumeResumeJobParams(): Pair<String, String>? {
     if (path == null || jobId == null) return null
     window.history.replaceState(null, "", window.location.pathname + window.location.hash)
     return path to jobId
-}
-
-actual fun pushBrowserState(path: String?) {
-    val hash = if (path != null) "#$path" else "#"
-    window.history.pushState(null, "", hash)
-}
-
-actual fun onBrowserBack(handler: (path: String?) -> Unit) {
-    window.onpopstate = {
-        val hash = window.location.hash.removePrefix("#")
-        handler(hash.ifEmpty { null })
-    }
 }
 
 // Lots of LLM help below, this was annoying AF
