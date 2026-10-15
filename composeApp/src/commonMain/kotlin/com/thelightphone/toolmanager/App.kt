@@ -300,6 +300,12 @@ fun App() {
                         spec = spec,
                     )
 
+                    is FormSpec -> FormScreen(
+                        remote = remote,
+                        spec = spec,
+                        onSubmitted = { navigateToRoot() },
+                    )
+
                     is DownloadSpec -> DownloadScreen(
                         remote = remote,
                         spec = spec

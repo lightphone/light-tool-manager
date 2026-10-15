@@ -24,6 +24,12 @@ one to a template based on its type.
 
   ![Upload template](.docs/dropbox_template.png)
 
+- **`FormSpec`** → [`FormScreen`](src/commonMain/kotlin/com/thelightphone/toolmanager/FormScreen.kt) —
+  A vertical stack of labeled text fields (one per `FormItem`). Under the hood it's an upload: on
+  submit, the responses are serialized as a `FormSubmission` and uploaded as a json file.
+
+  ![Form template](.docs/form_template.png)
+
 - **`DownloadSpec`** → [`DownloadScreen`](src/commonMain/kotlin/com/thelightphone/toolmanager/DownloadScreen.kt) —
   A single download target (`resourceFullPath`). The mirror image of `UploadSpec`.
 

@@ -53,6 +53,26 @@ fun main() {
         DesktopDataTree(uploadsDir)
     )
 
+    val contactForm = LeafView(
+        FormSpec(
+            "Contact Form",
+            "contact",
+            items = listOf(
+                FormItem("first_name", "First Name", "Jane", required = true),
+                FormItem("last_name", "Last Name", "Doe", required = true),
+                FormItem("password", "Password", "secret", hidden = true),
+            ),
+            headerText = "Fill this out and your responses will show in the Uploads directory!",
+            buttonText = "Submit"
+        ),
+        object : DesktopDataTree(uploadsDir) {
+            override suspend fun notify(directoryPath: Path) {
+                super.notify(directoryPath)
+                println("UPLOADED: $directoryPath")
+            }
+        }
+    )
+
     val export = LeafView(
         DownloadSpec(
             "Export Greeting",
@@ -91,7 +111,7 @@ fun main() {
         BranchView(
             RootViewSpec("root", ""),
             StaticBranchProvider(
-                perDirViews + combinedView + uploadsInbox + hiddenInbox + customDataEndpoint + export
+                perDirViews + combinedView + uploadsInbox + contactForm + hiddenInbox + customDataEndpoint + export
             )
         )
     }

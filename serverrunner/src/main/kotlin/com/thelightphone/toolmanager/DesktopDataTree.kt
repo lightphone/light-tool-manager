@@ -3,7 +3,7 @@ package com.thelightphone.toolmanager
 import com.thelightphone.toolmanager.datatree.FileDataTree
 import java.io.File
 
-class DesktopDataTree(
+open class DesktopDataTree(
     readRoots: List<File>,
     writeRoot: File,
     defaultThumbnails: Map<EntryType, File> = emptyMap(),

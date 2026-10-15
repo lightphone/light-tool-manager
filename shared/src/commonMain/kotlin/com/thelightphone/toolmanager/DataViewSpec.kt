@@ -85,3 +85,43 @@ data class CustomSpec(
     override val headerText: String? = null
     override fun withPathPrefix(prefix: String) = CustomSpec(label, joinPath(prefix, path))
 }
+
+@Serializable
+data class FormItem(
+    val id: String,
+    val label: String,
+    val hint: String = "", // note that in current UI, hint not shown
+    // Typed text is masked for this field. Still uploaded as plaintext!
+    val hidden: Boolean = false,
+    // Submission is blocked if field is blank.
+    val required: Boolean = false,
+)
+
+// Under the hood this is an upload. The form is serialized as a FormSubmission and
+// uploaded to `path` as a json text file
+@Serializable
+data class FormSpec(
+    override val label: String,
+    override val path: String,
+    val items: List<FormItem>,
+    override val headerText: String? = null,
+    val buttonText: String
+) :
+    LeafViewSpec() {
+    init {
+        require(items.map { it.id }.toSet().size == items.size) { "FormItem ids must be unique" }
+    }
+
+    override fun withPathPrefix(prefix: String) = FormSpec(label, joinPath(prefix, path), items, headerText, buttonText)
+}
+
+@Serializable
+data class FormResponse(
+    val item: FormItem,
+    val response: String,
+)
+
+@Serializable
+data class FormSubmission(
+    val responses: List<FormResponse>,
+)

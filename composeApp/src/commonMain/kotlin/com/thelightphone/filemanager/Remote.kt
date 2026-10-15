@@ -132,7 +132,6 @@ class HttpRemote(private val client: HttpClient, private val apiKey: String?) : 
 
     override suspend fun notifyUpload(path: String): Result<Unit> = resultCatching {
         client.post("${getBaseUrl()}/api/notify/$path")
-        Unit
     }
 
     override suspend fun deleteFile(path: String): Result<Boolean> = resultCatching {
