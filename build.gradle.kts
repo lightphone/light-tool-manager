@@ -17,7 +17,7 @@ plugins {
 
 allprojects {
     group = "com.thelightphone.toolmanager"
-    version = "0.0.15"
+    version = "0.0.16"
 
     plugins.withId("com.vanniktech.maven.publish") {
         extensions.configure<MavenPublishBaseExtension> {
