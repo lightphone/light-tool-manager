@@ -146,6 +146,7 @@ class ToolManagerServiceAndroid(
 
     // path, if given, is a tree node path (e.g. "Photos/Vacation") the URL deep links to once the
     // client has authenticated.
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     fun getHttpsUrl(hostOverride: InetAddress? = null, path: String? = null): String? {
         val key = auth?.primaryKey ?: return null
         val address = hostOverride ?: getLocalAddress() ?: return null
@@ -246,6 +247,7 @@ class ToolManagerServiceAndroid(
 
     // address clients on the local network can reach us at
     // tries the active Wi-Fi/ethernet network first, falls back to tether address if we're hotspot
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private fun getLocalAddress(): InetAddress? {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = cm.activeNetwork
@@ -263,6 +265,7 @@ class ToolManagerServiceAndroid(
 
     // when hosting a hotspot there's no WifiInfo IP; look for a private IPv4 address on an
     // interface other than the upstream one.
+    @RequiresPermission(android.Manifest.permission.ACCESS_NETWORK_STATE)
     private fun getTetherAddress(cm: ConnectivityManager): InetAddress? {
         val upstream = runCatching {
             cm.activeNetwork?.let { cm.getLinkProperties(it)?.interfaceName }
