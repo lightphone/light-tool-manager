@@ -1,7 +1,10 @@
 package com.thelightphone.toolmanager
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -21,7 +24,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
+import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.NetworkInterface
 import java.util.concurrent.TimeUnit
 
 data class LocalNetworkInfo(
@@ -31,7 +36,7 @@ data class LocalNetworkInfo(
     // null means undeterminable (requires API 33+); true means no password/open network
     val isOpenNetwork: Boolean?
 ) {
-    enum class Transport { WIFI, ETHERNET }
+    enum class Transport { WIFI, ETHERNET, HOTSPOT }
 }
 
 class ToolManagerServiceAndroid(
@@ -47,11 +52,14 @@ class ToolManagerServiceAndroid(
 
     companion object {
         private const val TAG = "ToolManagerServiceAndroid"
+        // hidden WifiManager constant, broadcast when the hotspot is toggled
+        private const val WIFI_AP_STATE_CHANGED_ACTION = "android.net.wifi.WIFI_AP_STATE_CHANGED"
     }
 
     private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? =
         null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var hotspotReceiver: BroadcastReceiver? = null
 
     var auth: ToolManagerAuth? = null
         private set
@@ -138,11 +146,10 @@ class ToolManagerServiceAndroid(
 
     // path, if given, is a tree node path (e.g. "Photos/Vacation") the URL deep links to once the
     // client has authenticated.
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     fun getHttpsUrl(hostOverride: InetAddress? = null, path: String? = null): String? {
         val key = auth?.primaryKey ?: return null
-        val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val address = hostOverride ?: getWifiAddress(wifi)
-        if (address.hostAddress == "0.0.0.0") return null
+        val address = hostOverride ?: getLocalAddress() ?: return null
         val domain = address.hostAddress!!.replace('.', '-') + ".my.local-ip.co"
         val deepLink = path?.trim('/')?.takeIf { it.isNotEmpty() }?.let { "/" + it.encodeURLPath() }.orEmpty()
         return "https://$domain:$port/#$key$deepLink"
@@ -154,11 +161,11 @@ class ToolManagerServiceAndroid(
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private fun getLocalNetworkInfo(): LocalNetworkInfo? {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = cm.activeNetwork ?: return null
-        val caps = cm.getNetworkCapabilities(network) ?: return null
+        val caps = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
         val transport = when {
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> LocalNetworkInfo.Transport.WIFI
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> LocalNetworkInfo.Transport.ETHERNET
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> LocalNetworkInfo.Transport.WIFI
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> LocalNetworkInfo.Transport.ETHERNET
+            getTetherAddress(cm) != null -> LocalNetworkInfo.Transport.HOTSPOT
             else -> return null
         }
 
@@ -175,7 +182,7 @@ class ToolManagerServiceAndroid(
             ssid = null
             isOpenNetwork = null
         }
-        val ipAddress = runCatching { getWifiAddress(wifi).hostAddress }.getOrNull()
+        val ipAddress = runCatching { getLocalAddress()?.hostAddress }.getOrNull()
 
         return LocalNetworkInfo(transport, ssid, ipAddress, isOpenNetwork)
     }
@@ -213,24 +220,65 @@ class ToolManagerServiceAndroid(
         }
         networkCallback = callback
         cm.registerNetworkCallback(request, callback)
+
+        // this should catch hotspot going away
+        val receiver = object : BroadcastReceiver() {
+            @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
+            override fun onReceive(context: Context, intent: Intent) {
+                if (isRunning && !hasLocalNetwork()) {
+                    logger.log(TAG, "Hotspot lost — stopping server")
+                    stop()
+                    onNetworkLost?.invoke()
+                }
+            }
+        }
+        hotspotReceiver = receiver
+        context.applicationContext.registerReceiver(receiver, IntentFilter(WIFI_AP_STATE_CHANGED_ACTION))
     }
 
     private fun unregisterNetworkMonitor() {
+        hotspotReceiver?.let { runCatching { context.applicationContext.unregisterReceiver(it) } }
+        hotspotReceiver = null
         val cb = networkCallback ?: return
         networkCallback = null
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         runCatching { cm.unregisterNetworkCallback(cb) }
     }
 
-    private fun getWifiAddress(wifi: WifiManager): InetAddress {
-        @Suppress("DEPRECATION")
-        val ip = wifi.connectionInfo.ipAddress
-        val bytes = byteArrayOf(
-            (ip and 0xFF).toByte(),
-            (ip shr 8 and 0xFF).toByte(),
-            (ip shr 16 and 0xFF).toByte(),
-            (ip shr 24 and 0xFF).toByte()
-        )
-        return InetAddress.getByAddress(bytes)
+    // address clients on the local network can reach us at
+    // tries the active Wi-Fi/ethernet network first, falls back to tether address if we're hotspot
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
+    private fun getLocalAddress(): InetAddress? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork
+        val caps = network?.let { cm.getNetworkCapabilities(it) }
+        val isLocal = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+        if (isLocal) {
+            cm.getLinkProperties(network)?.linkAddresses
+                ?.map { it.address }
+                ?.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
+                ?.let { return it }
+        }
+        return getTetherAddress(cm)
+    }
+
+    // when hosting a hotspot there's no WifiInfo IP; look for a private IPv4 address on an
+    // interface other than the upstream one.
+    @RequiresPermission(android.Manifest.permission.ACCESS_NETWORK_STATE)
+    private fun getTetherAddress(cm: ConnectivityManager): InetAddress? {
+        val upstream = runCatching {
+            cm.activeNetwork?.let { cm.getLinkProperties(it)?.interfaceName }
+        }.getOrNull()
+        val interfaces = runCatching { NetworkInterface.getNetworkInterfaces()?.toList() }.getOrNull()
+            ?: return null
+        return interfaces
+            .asSequence()
+            .filter { runCatching { it.isUp }.getOrDefault(false) }
+            .filter { !it.isLoopback && !it.isVirtual && it.name != upstream }
+            .filter { !it.name.startsWith("tun") && !it.name.startsWith("rmnet") && !it.name.startsWith("dummy") }
+            .sortedByDescending { it.name.startsWith("ap") || it.name.contains("wlan") }
+            .flatMap { it.inetAddresses.toList() }
+            .firstOrNull { it is Inet4Address && it.isSiteLocalAddress }
     }
 }
