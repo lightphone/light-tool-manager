@@ -46,8 +46,7 @@ fun RootScreen(
             remote.treeAt(path)
                 .onSuccess { pages = it }
                 .onFailure {
-                    val alert = ToolManagerAlert("Failed to load: ${it.message}")
-                    onAlert(alert)
+                    onAlert(failureAlert(it, "Failed to load"))
                 }
             isLoading = false
         }

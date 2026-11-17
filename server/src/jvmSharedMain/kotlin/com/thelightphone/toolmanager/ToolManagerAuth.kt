@@ -24,14 +24,22 @@ interface KeyCipher {
     fun decrypt(ciphertext: ByteArray): String
 }
 
+data class PairingCode(
+    val code: String,
+    val issuedAtMillis: Long,
+    val durationMillis: Long,
+) {
+    val expiresAtMillis: Long get() = issuedAtMillis + durationMillis
+}
+
 interface ToolManagerAuth {
     val primaryKey: String
 
     // True if `key` is currently valid
     fun validateKey(key: String): Boolean
 
-    // for display
-    fun currentCode(): String
+    // for display: the code a user would type right now, and its window
+    fun currentCode(): PairingCode
 
     // Checks `code` against the current time step. mints and returns new key when valid code passed
     fun mintKey(code: String): String?
@@ -109,7 +117,11 @@ class TotpToolManagerAuth(
         return candidateKeys.any { key -> constantTimeEquals(hmacSha256Hex(key, data), signature) }
     }
 
-    override fun currentCode(): String = hotp(secret, currentStep())
+    override fun currentCode(): PairingCode {
+        val step = currentStep()
+        val stepMillis = this.step.inWholeMilliseconds
+        return PairingCode(hotp(secret, step), issuedAtMillis = step * stepMillis, durationMillis = stepMillis)
+    }
 
     override fun mintKey(code: String): String? {
         synchronized(lockoutLock) {

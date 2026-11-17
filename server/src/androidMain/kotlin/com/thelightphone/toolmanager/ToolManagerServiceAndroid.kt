@@ -64,11 +64,20 @@ class ToolManagerServiceAndroid(
     var auth: ToolManagerAuth? = null
         private set
 
-    val isRunning: Boolean get() = server != null
+    // While USB tethering is up, also serve plain HTTP on the tether interface (on SERVER_PORT) and
+    // announce it as `<tetherHostname>.local` there. Null disables; takes effect on the next start.
+    var tetherHostname: String? = "lightphone"
+    private var tetherServer: TetherHttpServer? = null
+
+    // if set to false, ONLY tether mode will run (no wifi/https/network monitor)
+    var lanHttpsEnabled: Boolean = true
+
+    val isRunning: Boolean get() = server != null || tetherServer != null
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     fun start(): Boolean {
         if (isRunning) return true
+        if (!lanHttpsEnabled) return startInternal()
 
         val networkInfo = getLocalNetworkInfo()
         if (networkInfo == null) {
@@ -102,6 +111,20 @@ class ToolManagerServiceAndroid(
         CoroutineScope(Dispatchers.IO).launch { rootDataProvider.refreshProviders() }
 
         auth = provideNewAuth()
+        if (lanHttpsEnabled) {
+            startLanHttps()
+            registerNetworkMonitor()
+        }
+
+        tetherHostname?.let { hostname ->
+            tetherServer = TetherHttpServer(
+                context, rootDataProvider, logger, auth, hostname, SERVER_PORT, enableLogging
+            ).also { it.start() }
+        }
+        return true
+    }
+
+    private fun startLanHttps() {
         val sslConfig = SslConfig(logger)
         val keyStore = sslConfig.loadKeyStore(File(context.filesDir, "certs"))
         // not important since we're using local-ip.co's certs which are public
@@ -129,13 +152,12 @@ class ToolManagerServiceAndroid(
             )
         }.start(wait = false)
         server = engine
-
-        registerNetworkMonitor()
-        return true
     }
 
     fun stop() {
         unregisterNetworkMonitor()
+        tetherServer?.stop()
+        tetherServer = null
         val s = server
         server = null
         auth = null
@@ -154,6 +176,16 @@ class ToolManagerServiceAndroid(
         val deepLink = path?.trim('/')?.takeIf { it.isNotEmpty() }?.let { "/" + it.encodeURLPath() }.orEmpty()
         return "https://$domain:$port/#$key$deepLink"
     }
+
+    // Where the computer at the other end of the USB cable reaches us: the .local name, the tether
+    // IP while tethering is up, and the current key (see TetherEndpoint's URL extensions).
+    fun getTetherEndpoint(): TetherEndpoint? {
+        val hostname = tetherHostname ?: return null
+        if (!isRunning) return null
+        return TetherEndpoint("$hostname.local", tetherServer?.ipv4Address, SERVER_PORT, auth?.primaryKey)
+    }
+
+    fun currentPairingCode(): PairingCode? = auth?.currentCode()
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private fun hasLocalNetwork(): Boolean = getLocalNetworkInfo() != null
