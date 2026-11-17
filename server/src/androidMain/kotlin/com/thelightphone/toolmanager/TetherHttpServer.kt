@@ -1,29 +1,35 @@
 package com.thelightphone.toolmanager
 
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import com.thelightphone.toolmanager.datatree.RootDataTree
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.NetworkInterface
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceInfo
+import kotlin.concurrent.thread
 
 /**
  * While USB tethering is up, serves the Tool Manager over plain HTTP on the tether interface only,
  * and announces it over mDNS there as `<hostname>.local` (plus an `_http._tcp` service).
  */
 internal class TetherHttpServer(
-    private val context: Context,
     private val rootDataProvider: RootDataTree,
     private val logger: Logger,
     private val auth: ToolManagerAuth?,
@@ -34,16 +40,15 @@ internal class TetherHttpServer(
     private companion object {
         const val TAG = "TetherHttpServer"
 
-        // hidden ConnectivityManager.ACTION_TETHER_STATE_CHANGED, sticky
-        const val TETHER_STATE_CHANGED_ACTION = "android.net.conn.TETHER_STATE_CHANGED"
-
         // USB tethering interface names: RNDIS and NCM both show up as usbN on most kernels
         val USB_TETHER_INTERFACE = Regex("(usb|rndis|ncm)\\d+")
+
+        const val POLL_INTERVAL_MS = 1_000L
     }
 
-    // JmDNS and Netty startup block on network I/O, and tether broadcasts arrive on the main
-    // thread, so all state changes run here, one at a time.
-    private val executor = Executors.newSingleThreadScheduledExecutor { Thread(it, TAG).apply { isDaemon = true } }
+    // One thread for state changes, also keeps the blocking JmDNS/Netty calls off the
+    // main thread.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + CoroutineName(TAG))
 
     /**
      * The tether interface's addresses. IPv6 is the interface's link-local address: answering
@@ -52,7 +57,7 @@ internal class TetherHttpServer(
      */
     private data class TetherAddresses(val ipv4: Inet4Address, val ipv6: Inet6Address?)
 
-    // Written on the executor, read from any thread via ipv4Address.
+    // Write on [scope]'s thread, read from any thread via ipv4Address.
     @Volatile private var bound: TetherAddresses? = null
 
     /** The tether interface's IPv4 address while serving, else null. */
@@ -60,30 +65,21 @@ internal class TetherHttpServer(
     private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? = null
     private val mdns = mutableListOf<JmDNS>()
 
-    private val receiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = scheduleRefreshes()
-    }
-
     fun start() {
-        // Sticky, so this also delivers the current state right away.
-        context.applicationContext.registerReceiver(receiver, IntentFilter(TETHER_STATE_CHANGED_ACTION))
-        scheduleRefreshes()
-    }
-
-    fun stop() {
-        runCatching { context.applicationContext.unregisterReceiver(receiver) }
-        executor.execute { teardown() }
-        executor.shutdown()
-    }
-
-    // The broadcast can arrive before the interface has its address, with nothing sent once it
-    // does, so look again a few times over the next several seconds.
-    private fun scheduleRefreshes() {
-        if (executor.isShutdown) return
-        for (delayMs in longArrayOf(0, 1_000, 3_000, 7_000)) {
-            executor.schedule(::refresh, delayMs, TimeUnit.MILLISECONDS)
+        scope.launch {
+            try {
+                while (isActive) {
+                    refresh()
+                    delay(POLL_INTERVAL_MS)
+                }
+            } finally {
+                withContext(NonCancellable) { teardown() }
+            }
         }
     }
+
+    /** Stops polling and serving; returns once teardown has finished and the address is released. */
+    suspend fun stop() = scope.coroutineContext.job.cancelAndJoin()
 
     private fun refresh() {
         val addresses = findUsbTetherAddresses()
@@ -124,9 +120,16 @@ internal class TetherHttpServer(
     }
 
     private fun teardown() {
-        mdns.forEach { runCatching { it.unregisterAllServices(); it.close() } }
+        val closing = mdns.toList()
         mdns.clear()
-        server?.stop(500, 2_000, TimeUnit.MILLISECONDS)
+        if (closing.isNotEmpty()) {
+            // these can take a while, don't block a new bring-up
+            thread(isDaemon = true, name = "$TAG-mdns-close") {
+                closing.forEach { runCatching { it.unregisterAllServices(); it.close() } }
+            }
+        }
+        // by the time we get here the tether link is usually gone, don't worry about live connections
+        server?.let { runCatching { it.stop(0, 1_000, TimeUnit.MILLISECONDS) } }
         server = null
         if (bound != null) logger.log(TAG, "Stopped tether server on ${bound?.ipv4?.hostAddress}")
         bound = null
