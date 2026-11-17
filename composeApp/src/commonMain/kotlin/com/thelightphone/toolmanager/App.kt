@@ -39,8 +39,10 @@ import com.thelightphone.filemanager.HttpRemote
 import com.thelightphone.filemanager.Remote
 import com.thelightphone.toolmanager.composeapp.generated.resources.Res
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpResponseValidator
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -162,6 +164,12 @@ fun App() {
                     install(HttpTimeout) {
                         requestTimeoutMillis = 10000
                         connectTimeoutMillis = 5000
+                    }
+                    // throw same exception for all auth issues so client displays consistent messaging
+                    HttpResponseValidator {
+                        validateResponse { response ->
+                            if (response.status == HttpStatusCode.Unauthorized) throw AuthenticationException()
+                        }
                     }
                     if (apiKey != null) {
                         installRequestSigning(apiKey)

@@ -22,7 +22,11 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -52,23 +56,51 @@ class ToolManagerServiceAndroid(
 
     companion object {
         private const val TAG = "ToolManagerServiceAndroid"
+
         // hidden WifiManager constant, broadcast when the hotspot is toggled
         private const val WIFI_AP_STATE_CHANGED_ACTION = "android.net.wifi.WIFI_AP_STATE_CHANGED"
+
+        // Longest a start waits for the previous run to finish shutting down (see stopJob).
+        private const val PREVIOUS_STOP_WAIT_MS = 3_000L
     }
 
-    private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? =
-        null
+    sealed interface ServerTransport {
+        data object Wifi : ServerTransport
+        data class UsbTether(val hostname: String) : ServerTransport
+    }
+
+    private sealed interface ActiveServer {
+        suspend fun stop()
+        class Lan(
+            val engine: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>
+        ) : ActiveServer {
+            // Ktor's stop blocks (grace period + timeout), so keep it off the caller's thread.
+            override suspend fun stop() {
+                withContext(Dispatchers.IO) { engine.stop(1, 5, TimeUnit.SECONDS) }
+            }
+        }
+
+        class Tether(val server: TetherHttpServer, val hostname: String) : ActiveServer {
+            override suspend fun stop() = server.stop()
+        }
+    }
+
+    private var activeServer: ActiveServer? = null
+
+    // The previous run's shutdown, so a quick restart can wait for it to release the port
+    private var stopJob: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var hotspotReceiver: BroadcastReceiver? = null
 
     var auth: ToolManagerAuth? = null
         private set
 
-    val isRunning: Boolean get() = server != null
+    val isRunning: Boolean get() = activeServer != null
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
-    fun start(): Boolean {
+    fun start(transport: ServerTransport): Boolean {
         if (isRunning) return true
+        if (transport is ServerTransport.UsbTether) return startInternal(transport)
 
         val networkInfo = getLocalNetworkInfo()
         if (networkInfo == null) {
@@ -81,7 +113,7 @@ class ToolManagerServiceAndroid(
             return false
         }
 
-        return startInternal()
+        return startInternal(transport)
     }
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
@@ -94,20 +126,42 @@ class ToolManagerServiceAndroid(
             return false
         }
 
-        return startInternal()
+        return startInternal(ServerTransport.Wifi)
     }
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
-    private fun startInternal(): Boolean {
+    private fun startInternal(transport: ServerTransport): Boolean {
+        // block for a bit if we're waiting for a previous shutdown to complete
+        stopJob?.let { runBlocking { withTimeoutOrNull(PREVIOUS_STOP_WAIT_MS) { it.join() } } }
+        stopJob = null
+
         CoroutineScope(Dispatchers.IO).launch { rootDataProvider.refreshProviders() }
 
         auth = provideNewAuth()
+        when (transport) {
+            ServerTransport.Wifi -> {
+                activeServer = ActiveServer.Lan(startLanHttps())
+                // after setting activeServer: its (sticky) hotspot broadcast checks isRunning
+                registerNetworkMonitor()
+            }
+
+            is ServerTransport.UsbTether -> {
+                val tetherServer = TetherHttpServer(
+                    rootDataProvider, logger, auth, transport.hostname, SERVER_PORT, enableLogging
+                ).also { it.start() }
+                activeServer = ActiveServer.Tether(tetherServer, transport.hostname)
+            }
+        }
+        return true
+    }
+
+    private fun startLanHttps(): EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration> {
         val sslConfig = SslConfig(logger)
         val keyStore = sslConfig.loadKeyStore(File(context.filesDir, "certs"))
         // not important since we're using local-ip.co's certs which are public
         val keyStorePassword = "whatever"
 
-        val engine = embeddedServer(Netty, configure = {
+        return embeddedServer(Netty, configure = {
             // ALPN negotiation (needed for HTTP/2) goes through Netty's JdkAlpnSslEngine, which
             // isn't fully compatible with Android's SSLEngine implementation. fine for this app
             enableHttp2 = false
@@ -128,19 +182,17 @@ class ToolManagerServiceAndroid(
                 toolManagerLogger = logger
             )
         }.start(wait = false)
-        server = engine
-
-        registerNetworkMonitor()
-        return true
     }
 
+    // Returns right away (callers are Android callbacks, often on the main thread); the shutdown
+    // itself runs in the background as stopJob.
     fun stop() {
         unregisterNetworkMonitor()
-        val s = server
-        server = null
+        val stopping = activeServer
+        activeServer = null
         auth = null
-        CoroutineScope(Dispatchers.IO).launch {
-            s?.stop(1, 5, TimeUnit.SECONDS)
+        if (stopping != null) {
+            stopJob = CoroutineScope(Dispatchers.IO).launch { stopping.stop() }
         }
     }
 
@@ -151,9 +203,24 @@ class ToolManagerServiceAndroid(
         val key = auth?.primaryKey ?: return null
         val address = hostOverride ?: getLocalAddress() ?: return null
         val domain = address.hostAddress!!.replace('.', '-') + ".my.local-ip.co"
-        val deepLink = path?.trim('/')?.takeIf { it.isNotEmpty() }?.let { "/" + it.encodeURLPath() }.orEmpty()
+        val deepLink =
+            path?.trim('/')?.takeIf { it.isNotEmpty() }?.let { "/" + it.encodeURLPath() }.orEmpty()
         return "https://$domain:$port/#$key$deepLink"
     }
+
+    // tether details if it's running over USB: the .local name, the tether
+    // IP, and the current key (see TetherEndpoint's URL extensions).
+    fun getTetherEndpoint(): TetherEndpoint? {
+        val tether = activeServer as? ActiveServer.Tether ?: return null
+        return TetherEndpoint(
+            "${tether.hostname}.local",
+            tether.server.ipv4Address,
+            SERVER_PORT,
+            auth?.primaryKey
+        )
+    }
+
+    fun currentPairingCode(): PairingCode? = auth?.currentCode()
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private fun hasLocalNetwork(): Boolean = getLocalNetworkInfo() != null
@@ -187,18 +254,19 @@ class ToolManagerServiceAndroid(
         return LocalNetworkInfo(transport, ssid, ipAddress, isOpenNetwork)
     }
 
-    private val WifiInfo.isOpen: Boolean? get() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            // no reliable API below API 33 for the security type of the currently connected
-            // network — scan results are best-effort and may not include the active AP
-            return null
+    private val WifiInfo.isOpen: Boolean?
+        get() {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                // no reliable API below API 33 for the security type of the currently connected
+                // network — scan results are best-effort and may not include the active AP
+                return null
+            }
+            return when (currentSecurityType) {
+                WifiInfo.SECURITY_TYPE_OPEN, WifiInfo.SECURITY_TYPE_OWE -> true
+                WifiInfo.SECURITY_TYPE_UNKNOWN -> null
+                else -> false
+            }
         }
-        return when (currentSecurityType) {
-            WifiInfo.SECURITY_TYPE_OPEN, WifiInfo.SECURITY_TYPE_OWE -> true
-            WifiInfo.SECURITY_TYPE_UNKNOWN -> null
-            else -> false
-        }
-    }
 
     @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private fun registerNetworkMonitor() {
@@ -233,7 +301,10 @@ class ToolManagerServiceAndroid(
             }
         }
         hotspotReceiver = receiver
-        context.applicationContext.registerReceiver(receiver, IntentFilter(WIFI_AP_STATE_CHANGED_ACTION))
+        context.applicationContext.registerReceiver(
+            receiver,
+            IntentFilter(WIFI_AP_STATE_CHANGED_ACTION)
+        )
     }
 
     private fun unregisterNetworkMonitor() {
@@ -253,7 +324,7 @@ class ToolManagerServiceAndroid(
         val network = cm.activeNetwork
         val caps = network?.let { cm.getNetworkCapabilities(it) }
         val isLocal = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
-            caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+                caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
         if (isLocal) {
             cm.getLinkProperties(network)?.linkAddresses
                 ?.map { it.address }
@@ -270,8 +341,9 @@ class ToolManagerServiceAndroid(
         val upstream = runCatching {
             cm.activeNetwork?.let { cm.getLinkProperties(it)?.interfaceName }
         }.getOrNull()
-        val interfaces = runCatching { NetworkInterface.getNetworkInterfaces()?.toList() }.getOrNull()
-            ?: return null
+        val interfaces =
+            runCatching { NetworkInterface.getNetworkInterfaces()?.toList() }.getOrNull()
+                ?: return null
         return interfaces
             .asSequence()
             .filter { runCatching { it.isUp }.getOrDefault(false) }

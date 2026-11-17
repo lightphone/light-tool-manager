@@ -41,6 +41,11 @@ actual fun getApiKey(): String? {
     return cachedApiKey
 }
 
+// Saves a key obtained by pairing (see PairingScreen) where getApiKey() looks on the next load.
+fun storeApiKey(key: String) {
+    sessionStorage.setItem(API_KEY_STORAGE_KEY, key)
+}
+
 actual fun getInitialDeepLinkPath(): String? {
     extractFromLocation()
     return initialPath

@@ -53,6 +53,20 @@ data class ToolManagerAlert @OptIn(ExperimentalUuidApi::class) constructor(
     val dismissable: Boolean = true
 )
 
+// Thrown for any 401 from the API (see the HttpResponseValidator in App), typically because the
+// browser is holding a stale key from an earlier session.
+class AuthenticationException : Exception("Bad authentication - please reload in a fresh browser tab")
+
+private const val AuthenticationAlertId = "authentication-failed"
+
+// Alert for a failed request: "<prefix>: <error>", except auth failures, which get one persistent alert
+fun failureAlert(error: Throwable, prefix: String): ToolManagerAlert =
+    if (error is AuthenticationException) {
+        ToolManagerAlert(error.message.orEmpty(), id = AuthenticationAlertId, duration = Duration.INFINITE)
+    } else {
+        ToolManagerAlert("$prefix: ${error.message}")
+    }
+
 private val AlertMinWidth = 200.dp
 private val AlertMaxWidth = 500.dp
 private val AlertIconSize = 20.dp

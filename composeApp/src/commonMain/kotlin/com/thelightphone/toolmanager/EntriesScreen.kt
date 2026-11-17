@@ -145,7 +145,7 @@ fun EntriesScreen(
                 // rethrow so the coroutine actually cancels.
                 throw e
             } catch (e: Throwable) {
-                onAlert(ToolManagerAlert("Failed to load: ${e.message}"))
+                onAlert(failureAlert(e, "Failed to load"))
             }
             isLoading = false
             isLoadingMore = false

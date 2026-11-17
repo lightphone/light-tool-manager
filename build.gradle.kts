@@ -17,7 +17,10 @@ plugins {
 
 allprojects {
     group = "com.thelightphone.toolmanager"
-    version = "0.0.17"
+    val toolManagerVersion = "0.0.18"
+    version = providers.gradleProperty("toolmanager.version").orNull
+        ?.also { logger.warn("Using local version to build tool manager: $it") }
+        ?:toolManagerVersion
 
     plugins.withId("com.vanniktech.maven.publish") {
         extensions.configure<MavenPublishBaseExtension> {

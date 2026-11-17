@@ -134,7 +134,9 @@ fun main() {
     // Alternative to sharing the link/QR directly: read this code off to someone and have them
     // enter it manually to pair their own persistent key. It rotates every 30s, so this printed
     // value goes stale — there's no live-refreshing display of it yet.
-    println("Pairing code: ${auth.currentCode()} (valid ~30s)")
+    val pairingCode = auth.currentCode()
+    val secondsLeft = (pairingCode.expiresAtMillis - System.currentTimeMillis()) / 1000
+    println("Pairing code: ${pairingCode.code} (valid ~${secondsLeft}s)")
 
     embeddedServer(Netty, configure = {
         // See the matching comment in ToolManagerServiceAndroid

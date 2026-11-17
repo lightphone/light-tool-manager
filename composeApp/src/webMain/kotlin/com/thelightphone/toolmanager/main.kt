@@ -14,10 +14,15 @@ import io.ktor.client.HttpClient
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalCoilApi::class)
 fun main() {
     val apiKey = getApiKey()
-    val coilClient = HttpClient {
-        if (apiKey != null) {
-            installRequestSigning(apiKey)
+    if (apiKey == null) {
+        // No key -> give user opportunity to enter pairing code
+        ComposeViewport {
+            AppTheme { PairingScreen() }
         }
+        return
+    }
+    val coilClient = HttpClient {
+        installRequestSigning(apiKey)
     }
 
     SingletonImageLoader.setSafe {

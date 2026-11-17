@@ -63,6 +63,7 @@ kotlin {
 
         androidMain.get().dependencies {
             implementation(libs.androidx.annotation.jvm)
+            implementation(libs.jmdns)
         }
     }
 }
