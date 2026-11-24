@@ -36,6 +36,8 @@ internal class TetherHttpServer(
     private val hostname: String,
     private val port: Int,
     private val enableLogging: Boolean,
+    // Called on the server's own thread after the served addresses change (including to none)
+    private val onAddressesChanged: () -> Unit = {},
 ) {
     private companion object {
         const val TAG = "TetherHttpServer"
@@ -55,13 +57,21 @@ internal class TetherHttpServer(
      * AAAA queries with it (and serving on it) keeps resolvers from waiting out a missing AAAA
      * answer, which made every `.local` lookup take 5s on macOS.
      */
-    private data class TetherAddresses(val ipv4: Inet4Address, val ipv6: Inet6Address?)
+    private data class TetherAddresses(
+        val ipv4: Inet4Address,
+        val ipv6: Inet6Address?,
+        // The interface's unique-local address (fc00::/7), can be reached from browser
+        val ipv6UniqueLocal: Inet6Address?,
+    )
 
     // Write on [scope]'s thread, read from any thread via ipv4Address.
     @Volatile private var bound: TetherAddresses? = null
 
     /** The tether interface's IPv4 address while serving, else null. */
     val ipv4Address: String? get() = bound?.ipv4?.hostAddress
+
+    /** The tether interface's unique-local IPv6 address while serving on it, else null. */
+    val ipv6Address: String? get() = bound?.ipv6UniqueLocal?.hostAddress?.substringBefore('%')
     private var server: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? = null
     private val mdns = mutableListOf<JmDNS>()
 
@@ -73,7 +83,10 @@ internal class TetherHttpServer(
                     delay(POLL_INTERVAL_MS)
                 }
             } finally {
-                withContext(NonCancellable) { teardown() }
+                withContext(NonCancellable) {
+                    teardown()
+                    onAddressesChanged()
+                }
             }
         }
     }
@@ -84,16 +97,21 @@ internal class TetherHttpServer(
     private fun refresh() {
         val addresses = findUsbTetherAddresses()
         if (addresses == bound) return
-        logger.log(TAG, "USB tether addresses changed: ${addresses?.ipv4?.hostAddress} ${addresses?.ipv6?.hostAddress}")
+        logger.log(
+            TAG,
+            "USB tether addresses changed: ${addresses?.ipv4?.hostAddress} ${addresses?.ipv6?.hostAddress} " +
+                "${addresses?.ipv6UniqueLocal?.hostAddress}"
+        )
         teardown()
         if (addresses != null) bringUp(addresses)
+        onAddressesChanged()
     }
 
     private fun bringUp(addresses: TetherAddresses) {
         try {
             server = embeddedServer(Netty, configure = {
                 enableHttp2 = false
-                for (address in listOfNotNull(addresses.ipv4, addresses.ipv6)) {
+                for (address in listOfNotNull(addresses.ipv4, addresses.ipv6, addresses.ipv6UniqueLocal)) {
                     connector {
                         host = address.hostAddress!!
                         port = this@TetherHttpServer.port
@@ -140,9 +158,14 @@ internal class TetherHttpServer(
         for (iface in interfaces) {
             if (!USB_TETHER_INTERFACE.matches(iface.name) || !runCatching { iface.isUp }.getOrDefault(false)) continue
             val addresses = iface.inetAddresses.toList()
-            val ipv4 = addresses.filterIsInstance<Inet4Address>().firstOrNull { it.isSiteLocalAddress } ?: continue
+            // Private when tethering assigns the address, link-local (169.254.x.y) when the host
+            // app gives the phone a static one so that no DHCP runs on the link.
+            val ipv4 = addresses.filterIsInstance<Inet4Address>()
+                .firstOrNull { it.isSiteLocalAddress || it.isLinkLocalAddress } ?: continue
             val ipv6 = addresses.filterIsInstance<Inet6Address>().firstOrNull { it.isLinkLocalAddress }
-            return TetherAddresses(ipv4, ipv6)
+            val ipv6UniqueLocal = addresses.filterIsInstance<Inet6Address>()
+                .firstOrNull { (it.address[0].toInt() and 0xfe) == 0xfc }
+            return TetherAddresses(ipv4, ipv6, ipv6UniqueLocal)
         }
         return null
     }

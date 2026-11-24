@@ -17,7 +17,7 @@ plugins {
 
 allprojects {
     group = "com.thelightphone.toolmanager"
-    val toolManagerVersion = "0.0.18"
+    val toolManagerVersion = "0.0.19"
     version = providers.gradleProperty("toolmanager.version").orNull
         ?.also { logger.warn("Using local version to build tool manager: $it") }
         ?:toolManagerVersion
