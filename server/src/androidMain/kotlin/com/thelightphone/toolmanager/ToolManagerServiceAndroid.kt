@@ -23,6 +23,10 @@ import io.ktor.server.netty.NettyApplicationEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -85,7 +89,16 @@ class ToolManagerServiceAndroid(
         }
     }
 
-    private var activeServer: ActiveServer? = null
+    // Volatile: read from the tether server's thread when its addresses change.
+    @Volatile private var activeServer: ActiveServer? = null
+
+    private val _tetherEndpoint = MutableStateFlow<TetherEndpoint?>(null)
+
+    /**
+     * Where a computer on the USB cable reaches the tool manager while running over USB tether,
+     * else null. Updates when the server starts/stops and when the tether addresses change.
+     */
+    val tetherEndpoint: StateFlow<TetherEndpoint?> = _tetherEndpoint.asStateFlow()
 
     // The previous run's shutdown, so a quick restart can wait for it to release the port
     private var stopJob: Job? = null
@@ -146,10 +159,17 @@ class ToolManagerServiceAndroid(
             }
 
             is ServerTransport.UsbTether -> {
+                lateinit var tether: ActiveServer.Tether
                 val tetherServer = TetherHttpServer(
-                    rootDataProvider, logger, auth, transport.hostname, SERVER_PORT, enableLogging
-                ).also { it.start() }
-                activeServer = ActiveServer.Tether(tetherServer, transport.hostname)
+                    rootDataProvider, logger, auth, transport.hostname, SERVER_PORT, enableLogging,
+                    onAddressesChanged = { publishTetherEndpoint(tether) },
+                )
+                tether = ActiveServer.Tether(tetherServer, transport.hostname)
+                activeServer = tether
+                // after activeServer, so an address change from before this is either applied here
+                // or by its own callback
+                _tetherEndpoint.value = tether.endpoint()
+                tetherServer.start()
             }
         }
         return true
@@ -190,6 +210,7 @@ class ToolManagerServiceAndroid(
         unregisterNetworkMonitor()
         val stopping = activeServer
         activeServer = null
+        _tetherEndpoint.value = null
         auth = null
         if (stopping != null) {
             stopJob = CoroutineScope(Dispatchers.IO).launch { stopping.stop() }
@@ -208,16 +229,19 @@ class ToolManagerServiceAndroid(
         return "https://$domain:$port/#$key$deepLink"
     }
 
-    // tether details if it's running over USB: the .local name, the tether
-    // IP, and the current key (see TetherEndpoint's URL extensions).
-    fun getTetherEndpoint(): TetherEndpoint? {
-        val tether = activeServer as? ActiveServer.Tether ?: return null
-        return TetherEndpoint(
-            "${tether.hostname}.local",
-            tether.server.ipv4Address,
-            SERVER_PORT,
-            auth?.primaryKey
-        )
+    // tether details: the .local name, the tether IPs, and the current key (see TetherEndpoint's
+    // URL extensions).
+    private fun ActiveServer.Tether.endpoint() = TetherEndpoint(
+        "$hostname.local",
+        server.ipv4Address,
+        SERVER_PORT,
+        auth?.primaryKey,
+        server.ipv6Address,
+    )
+
+    private fun publishTetherEndpoint(tether: ActiveServer.Tether) {
+        // only accept updates from the active server
+        _tetherEndpoint.update { current -> if (activeServer === tether) tether.endpoint() else current }
     }
 
     fun currentPairingCode(): PairingCode? = auth?.currentCode()
