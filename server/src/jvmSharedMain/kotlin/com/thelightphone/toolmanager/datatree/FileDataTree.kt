@@ -72,6 +72,9 @@ open class FileDataTree(
         return Result.failure(lastFailure)
     }
 
+    protected fun resolveExisting(path: Path): File? =
+        findInReadRoots(path).getOrNull()?.first?.toFile()
+
     override fun listEntries(path: Path): Result<List<Entry>> {
         var anySuccess = false
         var lastFailure: Throwable = NoSuchElementException("Path not found: $path")

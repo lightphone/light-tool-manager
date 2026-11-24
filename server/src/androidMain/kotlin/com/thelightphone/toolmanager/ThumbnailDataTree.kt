@@ -19,18 +19,20 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Path
+import java.nio.file.Paths
 import kotlin.time.Duration.Companion.milliseconds
 
 
 class ThumbnailDataTree(
-    private val root: File,
+    readRoots: List<File>,
+    writeRoot: File,
     private val context: Context,
     private val logger: Logger,
     defaultThumbnails: Map<EntryType, File>,
     readOnly: Boolean = false,
     maxCacheSizeBytes: Int = 16 * 1024 * 1024,
     private val thumbnailSizePx: Int = 512
-) : FileDataTree(root, defaultThumbnails, readOnly = readOnly) {
+) : FileDataTree(readRoots, writeRoot, defaultThumbnails, readOnly = readOnly) {
     private val uploadedFiles = mutableSetOf<Path>()
 
     private val cache = object : LruCache<String, ByteArray>(maxCacheSizeBytes) {
@@ -45,7 +47,7 @@ class ThumbnailDataTree(
     }
 
     private fun cachedThumbnail(filePath: Path, generate: (File) -> Bitmap): Result<InputStream>? {
-        val file = root.resolve(filePath.toString()).takeIf { it.exists() } ?: return null
+        val file = resolveExisting(filePath) ?: return null
         val key = filePath.normalize().toString()
         cache.get(key)?.let {
             return Result.success(ByteArrayInputStream(it))
@@ -85,7 +87,8 @@ class ThumbnailDataTree(
         if (uploadedFiles.isEmpty()) return
         MediaScannerConnection.scanFile(
             context,
-            uploadedFiles.map { root.resolve(it.toString()).absolutePath }.toTypedArray(),
+            // uploads always land in writeRoot
+            uploadedFiles.map { writeRoot.resolve(it.toString()).absolutePath }.toTypedArray(),
             null
         ) { _, _ ->
             uploadedFiles.clear()
@@ -104,15 +107,20 @@ class ThumbnailDataTree(
     }
 
     private fun Entry.fetchVideoMeta(): Map<String, String> {
-        val duration = MediaMetadataRetriever().use { mmr ->
-            try {
-                mmr.setDataSource(path)
-                mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
-            } catch (e: Exception) {
-                logger.reportError("ThumbnailFileTree", e, "Error fetching video metadata")
-                null
-            }?.milliseconds
-        }
+        // MediaMetadataRetriever is only AutoCloseable from API 29, so release it manually
+        val mmr = MediaMetadataRetriever()
+        val duration = try {
+            // entry.path is relative to whichever read root holds the file
+            val file = resolveExisting(Paths.get(path))
+                ?: throw IOException("File not found in any read root: $path")
+            mmr.setDataSource(file.path)
+            mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+        } catch (e: Exception) {
+            logger.reportError("ThumbnailFileTree", e, "Error fetching video metadata")
+            null
+        } finally {
+            runCatching { mmr.release() }
+        }?.milliseconds
         // if it failed, still populate the cache so we don't keep looking for it
         if (duration == null) return emptyMap()
         return mapOf(
