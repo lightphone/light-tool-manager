@@ -29,6 +29,12 @@ actual fun triggerFilePicker(
 ) {}
 actual fun getApiKey(): String? = null
 
+actual fun getReturnUrl(): String? = null
+
+actual fun getBackUrl(): String? = null
+
+actual fun navigateToUrl(url: String) {}
+
 actual suspend fun platformUploadOctetStream(
     remote: Remote,
     url: String,
