@@ -135,6 +135,12 @@ fun dismissGlobalAlert(id: String) {
 
 private const val ServerDisconnectedAlertId = "server-disconnected"
 
+private val ConnectedPollInterval = 6.seconds
+private val DisconnectedPollInterval = 2.seconds
+
+// If the server disapppears, how long to wait before we go back to the Dashboard
+private val ReturnDelay = 5.seconds
+
 @Composable
 fun App() {
     AppTheme {
@@ -154,6 +160,12 @@ fun App() {
         var pendingResumeJob by remember { mutableStateOf<Pair<String, String>?>(null) }
 
         val apiKey = remember { getApiKey() }
+        val returnUrl = remember { getReturnUrl() }
+        val backUrl = remember { getBackUrl() }
+
+        var openedViaDeepLink by remember { mutableStateOf(false) }
+        // Whether the last ping reached the server successfully:
+        var serverConnected by remember { mutableStateOf(true) }
 
         val remote: Remote = remember(apiKey) {
             HttpRemote(
@@ -243,23 +255,37 @@ fun App() {
             visitedSpecs = visitedSpecs + chain.associateBy { it.path }
             backStack = listOf<DataViewSpec?>(null) + chain.dropLast(1)
             currentSpec = chain.last()
+            openedViaDeepLink = true
         }
 
         // ping server continuously
         LaunchedEffect(Unit) {
-            val pollDuration = 6.seconds
-            var wasConnected = true
             while (true) {
-                delay(pollDuration)
+                val delayAmount = if (serverConnected) {
+                    ConnectedPollInterval
+                } else {
+                    DisconnectedPollInterval
+                }
+
+                delay(delayAmount)
+
                 val success = remote.ping().getOrDefault(false)
-                if (success != wasConnected) {
-                    wasConnected = success
+
+                if (success != serverConnected) {
+                    serverConnected = success
+
                     if (success) {
                         dismissGlobalAlert(ServerDisconnectedAlertId)
                     } else {
+                        val message = if (returnUrl != null) {
+                            "Disconnected from your phone. Returning you to reconnect..."
+                        } else {
+                            "Error: Server Disconnected"
+                        }
+
                         pushGlobalAlert(
                             ToolManagerAlert(
-                                "Error: Server Disconnected",
+                                message,
                                 id = ServerDisconnectedAlertId,
                                 duration = Duration.INFINITE,
                                 dismissable = false
@@ -270,8 +296,26 @@ fun App() {
             }
         }
 
+        // once the server is gone we should navigate back to whatever URL sent
+        // us here (ie, the Dashboard)
+        if (!serverConnected && returnUrl != null) {
+            LaunchedEffect(returnUrl) {
+                delay(ReturnDelay)
+                navigateToUrl(returnUrl)
+            }
+        }
+
         val alerts by globalAlertsFlow.collectAsState()
-        val onBackPressed = if (backStack.isEmpty()) null else ::navigateBack
+
+        val isAtRootMenu = backStack.isEmpty()
+        val isAtDeepLinkedPage = openedViaDeepLink && backStack == listOf(null)
+
+        val onBackPressed: (() -> Unit)? = when {
+            !isAtRootMenu && !isAtDeepLinkedPage -> ::navigateBack
+            backUrl != null -> ({ navigateToUrl(backUrl) })
+            isAtRootMenu -> null
+            else -> ::navigateBack
+        }
 
         ToolManagerScreen(
             onBackPressed = onBackPressed,

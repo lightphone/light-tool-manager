@@ -76,9 +76,13 @@ interface Remote {
     fun thumbnailFetcherForEntry(entry: Entry, context: PlatformContext): ImageRequest
 }
 
+private const val PingTimeoutMillis = 4000L
+
 class HttpRemote(private val client: HttpClient, private val apiKey: String?) : Remote {
     override suspend fun ping(): Result<Boolean> = resultCatching {
-        client.get("${getBaseUrl()}/ping").status.isSuccess()
+        client.get("${getBaseUrl()}/api/validate") {
+            timeout { requestTimeoutMillis = PingTimeoutMillis }
+        }.status.isSuccess()
     }
 
     override suspend fun treeAt(path: String): Result<List<DataViewSpec>> {

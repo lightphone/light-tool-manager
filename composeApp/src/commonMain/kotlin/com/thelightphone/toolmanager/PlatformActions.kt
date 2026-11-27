@@ -37,6 +37,15 @@ expect fun triggerFilePicker(
 
 expect fun getApiKey(): String?
 
+// Where to redirect the user's browser if the local server dies
+// (most likely the Dashboard)
+expect fun getReturnUrl(): String?
+
+// Where to navigate to if the user clicks the back chevron:
+expect fun getBackUrl(): String?
+
+expect fun navigateToUrl(url: String)
+
 // Bypasses HttpClient.post/setBody on purpose: ktor-client-js unconditionally routes every
 // outgoing request body through a conversion that copies the whole payload into a boxed plain
 // JS Array before re-wrapping it as a Uint8Array, no matter how setBody was called. For large
