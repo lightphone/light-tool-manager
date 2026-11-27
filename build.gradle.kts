@@ -23,7 +23,7 @@ val jitPackVersion = providers.environmentVariable("VERSION").orNull
 
 allprojects {
     group = if (isJitPack) "com.github.lightphone.light-tool-manager" else "com.thelightphone.toolmanager"
-    val toolManagerVersion = "0.0.19"
+    val toolManagerVersion = "0.0.20"
     version = providers.gradleProperty("toolmanager.version").orNull
         ?.also { logger.warn("Using local version to build tool manager: $it") }
         ?: jitPackVersion?.takeIf { isJitPack }
