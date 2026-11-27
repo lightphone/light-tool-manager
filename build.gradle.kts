@@ -15,17 +15,27 @@ plugins {
     alias(libs.plugins.vanniktechMavenPublish) apply false
 }
 
+// JitPack sets JITPACK=true and VERSION=<tag or commit> when it builds this repo.
+// It serves multi-module builds under com.github.<org>.<repo>, so publish with that
+// group to keep the Gradle module metadata consistent with what consumers request.
+val isJitPack = providers.environmentVariable("JITPACK").orNull == "true"
+val jitPackVersion = providers.environmentVariable("VERSION").orNull
+
 allprojects {
-    group = "com.thelightphone.toolmanager"
+    group = if (isJitPack) "com.github.lightphone.light-tool-manager" else "com.thelightphone.toolmanager"
     val toolManagerVersion = "0.0.19"
     version = providers.gradleProperty("toolmanager.version").orNull
         ?.also { logger.warn("Using local version to build tool manager: $it") }
-        ?:toolManagerVersion
+        ?: jitPackVersion?.takeIf { isJitPack }
+        ?: toolManagerVersion
 
     plugins.withId("com.vanniktech.maven.publish") {
         extensions.configure<MavenPublishBaseExtension> {
-            publishToMavenCentral()
-            signAllPublications()
+            // JitPack only needs publishToMavenLocal, and has no signing keys.
+            if (!isJitPack) {
+                publishToMavenCentral()
+                signAllPublications()
+            }
 
             pom {
                 name.set(project.name)
