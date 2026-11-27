@@ -85,3 +85,8 @@ kotlin {
         }
     }
 }
+
+// Pin the Res package so it doesn't follow the project group (which differs on JitPack builds).
+compose.resources {
+    packageOfResClass = "com.thelightphone.toolmanager.composeapp.generated.resources"
+}

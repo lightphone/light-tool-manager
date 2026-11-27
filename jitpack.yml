@@ -1,0 +1,6 @@
+jdk:
+  - openjdk21
+install:
+  # Workaround for jitpack/jitpack.io#8096: on some hosts the sdkman JDK can't open jars,
+  # so use the image's own JDK when it exists. Remove once #8096 is fixed.
+  - if [ -x /usr/lib/jvm/java-21-openjdk-amd64/bin/java ]; then export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64; export PATH="$JAVA_HOME/bin:$PATH"; fi; java -version; ./gradlew :shared:publishToMavenLocal :server:publishToMavenLocal :client:publishToMavenLocal --stacktrace
